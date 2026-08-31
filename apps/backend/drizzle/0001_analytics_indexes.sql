@@ -1,0 +1,2 @@
+CREATE INDEX "ix_analytics_events_user_id" ON "analytics_events" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "ix_analytics_events_workspace_id" ON "analytics_events" USING btree ("workspace_id");

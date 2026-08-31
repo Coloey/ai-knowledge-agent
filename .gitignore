@@ -1,4 +1,5 @@
 node_modules
+.pnpm-store/
 dist
 .turbo
 .env
@@ -18,3 +19,4 @@ htmlcov/
 storage
 backend/storage
 infra/certbot
+.DS_Store

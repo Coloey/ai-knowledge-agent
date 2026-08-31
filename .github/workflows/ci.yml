@@ -3,26 +3,10 @@ name: AI Knowledge Agent CI
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 jobs:
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.14.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-
-  backend:
+  verify:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -31,33 +15,38 @@ jobs:
           POSTGRES_DB: agent
           POSTGRES_USER: agent
           POSTGRES_PASSWORD: agent
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U agent -d agent"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: pnpm/action-setup@v4
         with:
-          python-version: "3.11"
-          cache: pip
-      - working-directory: backend
-        run: pip install -e ".[dev]"
-      - working-directory: backend
-        run: ruff check app
-      - working-directory: backend
-        run: alembic upgrade head
+          version: 10.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm --filter @agent/backend format:check
+      - run: pnpm test
+      - run: pnpm --filter @agent/backend build
+      - run: pnpm --filter @agent/backend db:migrate
         env:
-          DATABASE_URL: postgresql+psycopg://agent:agent@localhost:5432/agent
-      - working-directory: backend
-        run: pytest
-        env:
-          DATABASE_URL: postgresql+psycopg://agent:agent@localhost:5432/agent
-          REDIS_URL: redis://localhost:6379/0
+          APP_ENV: test
+          AI_PROVIDER: local
+          DATABASE_URL: postgresql://agent:agent@localhost:5432/agent
+          QUEUE_REDIS_URL: redis://localhost:6379/0
+          CONTROL_REDIS_URL: redis://localhost:6379/1

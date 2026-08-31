@@ -35,6 +35,12 @@ services:
     volumes:
       - minio_data:/data
 
+  tika:
+    image: apache/tika:3.2.2.0
+    ports:
+      - "9998:9998"
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

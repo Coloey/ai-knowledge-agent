@@ -1,47 +1,55 @@
 # AI Knowledge Agent
 
-一个完整的 AI 知识管理 / SmartBar Agent 个人项目骨架。
+AI knowledge management and SmartBar Agent application built as a pnpm workspace.
 
 ## Stack
 
-- Frontend: React 18, TypeScript, Rsbuild, pnpm workspace, Zustand-style domain package, Ant Design-ready UI package.
-- Backend: FastAPI, PostgreSQL, pgvector, Redis, Celery.
-- AI: DashScope-compatible provider with local deterministic fallback.
-- Deploy: Docker Compose, Nginx, GitHub Actions.
+- Web: React 18, TypeScript, Rsbuild, Zustand and Ant Design.
+- Backend: Node.js 24 LTS, NestJS 11, Fastify 5 and Drizzle ORM.
+- Data: PostgreSQL 16 with pgvector, Redis/BullMQ and S3-compatible object storage.
+- Document processing: an isolated NestJS worker backed by Apache Tika.
+- AI: DashScope or another OpenAI-compatible provider, with a local deterministic fallback outside production.
 
 ## Local Start
 
 ```bash
 pnpm install
 pnpm infra:dev
-cd backend
-cp .env.example .env
-pip install -e ".[dev]"
-alembic upgrade head
-uvicorn app.main:app --reload
+cp apps/backend/.env.example apps/backend/.env
+pnpm --filter @agent/backend db:migrate
+pnpm backend:dev
 ```
 
-In another terminal:
+Run the parser worker and frontend in separate terminals:
 
 ```bash
-cd backend
-celery -A app.workers.celery_app worker -l info
-```
-
-Frontend:
-
-```bash
+pnpm backend:worker
 pnpm dev
 ```
 
-## Production Build
+The API listens on `http://localhost:8000`. Liveness is exposed at `/health/live`; readiness is exposed at
+`/health/ready`.
+
+## Verification
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml build
-docker compose -f infra/docker-compose.prod.yml run --rm backend-api alembic upgrade head
-docker compose -f infra/docker-compose.prod.yml up -d
+pnpm typecheck
+pnpm test
+pnpm backend:build
 ```
 
-The production Nginx image serves the built React app and proxies `/auth`, `/workspaces`,
-`/library` and `/notta-brain` to FastAPI. The SSE endpoint disables proxy buffering in
-`infra/nginx/default.conf`.
+## Production
+
+The API, worker and migration job use the same Node 24 image. The reference single-host deployment is:
+
+```bash
+docker compose --env-file .env.production -f infra/docker-compose.prod.yml build
+docker compose --env-file .env.production -f infra/docker-compose.prod.yml up -d
+```
+
+For higher availability, deploy the same image as separate API and worker workloads and use managed PostgreSQL,
+Redis and object storage. See `docs/runbooks/backend-deployment.md` before deploying or migrating an existing
+FastAPI database.
+
+The legacy Python implementation remains under `backend/` temporarily as a contract and rollback reference. New
+backend development belongs in `apps/backend/`.

@@ -1,4 +1,7 @@
-# AI Knowledge Agent Backend
+# Legacy FastAPI Backend
+
+> This implementation is retained temporarily for contract comparison and rollback during the NestJS migration.
+> New backend development belongs in `apps/backend/`.
 
 Python backend for the AI knowledge-management demo. It keeps the SmartBar-facing `/notta-brain/session/*`
 interfaces compatible with the frontend plan while using FastAPI, PostgreSQL, pgvector, Redis, Celery and

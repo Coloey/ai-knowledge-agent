@@ -8,8 +8,10 @@
     "build": "pnpm --filter @agent/web build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "backend:dev": "cd backend && uvicorn app.main:app --reload",
-    "backend:worker": "cd backend && celery -A app.workers.celery_app worker -l info",
+    "backend:dev": "pnpm --filter @agent/backend dev",
+    "backend:worker": "pnpm --filter @agent/backend dev:worker",
+    "backend:build": "pnpm --filter @agent/backend build",
+    "backend:test": "pnpm --filter @agent/backend test",
     "infra:dev": "docker compose -f infra/docker-compose.dev.yml up -d"
   },
   "packageManager": "pnpm@10.14.0",

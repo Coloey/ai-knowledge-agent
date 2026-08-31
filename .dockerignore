@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+**/.env
+backend
+apps/backend/storage
+infra/certbot
+*.log
