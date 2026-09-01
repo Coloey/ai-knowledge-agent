@@ -15,30 +15,28 @@ object storage instead of the Compose stateful services.
 
 ## Database Migration
 
-1. Back up PostgreSQL and record the active FastAPI/Alembic revision.
-2. Stop schema changes from the Python deployment.
-3. Run `node dist/database/migrate.js` as a single one-off job.
-4. On an empty database it applies all Drizzle migrations.
-5. On an existing Alembic database it adds refresh-token, outbox and idempotency structures, records the Drizzle
+1. Back up PostgreSQL and record any active legacy Alembic revision when migrating an older installation.
+2. Run `node dist/database/migrate.js` as a single one-off job.
+3. On an empty database it applies all Drizzle migrations.
+4. On an existing Alembic database it adds refresh-token, outbox and idempotency structures, records the Drizzle
    baseline, and then applies later migrations.
-6. Verify `drizzle.__drizzle_migrations`, `auth_refresh_tokens`, `outbox_events` and the pgvector HNSW index.
+5. Verify `drizzle.__drizzle_migrations`, `auth_refresh_tokens`, `outbox_events` and the pgvector HNSW index.
 
 Do not run Alembic after the Drizzle baseline. Do not use `drizzle-kit push` against staging or production.
 
 ## Rollout
 
-1. Deploy one worker with queue consumption paused or zero concurrency.
+1. Run the migration job.
 2. Deploy the NestJS API and verify `/health/live` and `/health/ready`.
-3. Route read-only Auth/Workspace traffic to NestJS and compare responses.
-4. Route Library writes and enable the Node worker; monitor outbox lag, queue failures and parse latency.
-5. Route Session traffic last; monitor active SSE connections, first-token latency and LLM error rate.
-6. Increase API replicas to at least two and scale workers by queue depth.
+3. Deploy the Node worker; monitor outbox lag, queue failures and parse latency.
+4. Monitor active SSE connections, first-token latency and LLM error rate.
+5. Increase API replicas to at least two and scale workers by queue depth.
 
 ## Rollback
 
-Route affected endpoints back to FastAPI without reverting database migrations. Stop Node workers before restarting
-Celery consumers so only one worker stack owns new parsing jobs. New refresh tokens are not understood by the legacy
-backend, so an Auth rollback may require users to log in again.
+Roll back by redeploying the previous NestJS image and stopping workers before changing migration state. Do not rerun
+Alembic after the Drizzle baseline. If an older external FastAPI deployment is still available, route traffic back only
+after stopping Node workers so one worker stack owns parsing jobs.
 
 ## Alerts
 

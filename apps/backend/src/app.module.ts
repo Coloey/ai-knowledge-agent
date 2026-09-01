@@ -17,7 +17,7 @@ import { WorkspacesModule } from './workspaces/workspaces.module';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
-      envFilePath: ['.env', '../../backend/.env'],
+      envFilePath: ['.env', 'apps/backend/.env'],
       validate: validateEnvironment,
     }),
     LoggerModule.forRoot({

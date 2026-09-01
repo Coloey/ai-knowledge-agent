@@ -49,7 +49,6 @@ docker compose --env-file .env.production -f infra/docker-compose.prod.yml up -d
 
 For higher availability, deploy the same image as separate API and worker workloads and use managed PostgreSQL,
 Redis and object storage. See `docs/runbooks/backend-deployment.md` before deploying or migrating an existing
-FastAPI database.
+legacy Alembic database.
 
-The legacy Python implementation remains under `backend/` temporarily as a contract and rollback reference. New
-backend development belongs in `apps/backend/`.
+Backend development belongs in `apps/backend/`.

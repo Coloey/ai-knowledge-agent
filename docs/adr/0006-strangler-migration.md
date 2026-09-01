@@ -1,12 +1,12 @@
 # ADR-0006: Migrate by route ownership
 
 ## Status
-Accepted
+Completed
 
 ## Decision
-Run FastAPI and NestJS in parallel during rollout but assign each write route to exactly one backend. Preserve the
-existing response envelope and SmartBar SSE event contract. Move Session streaming last.
+The temporary FastAPI-to-NestJS strangler migration is complete. NestJS now owns the API, worker and Drizzle
+migrations, while preserving the existing response envelope and SmartBar SSE event contract.
 
 ## Consequences
-Rollback remains possible without dual writes. Alembic stops owning schema changes at the recorded cutover revision;
-all later migrations are generated and applied by Drizzle.
+The legacy Python backend is no longer kept in the repository. Drizzle owns new schema changes; its migration runner
+keeps an Alembic compatibility baseline for existing databases created before the cutover.

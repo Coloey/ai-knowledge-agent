@@ -12,7 +12,7 @@ import { QueueInfrastructureModule } from './queue/queue.module';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
-      envFilePath: ['.env', '../../backend/.env'],
+      envFilePath: ['.env', 'apps/backend/.env'],
       validate: validateEnvironment,
     }),
     LoggerModule.forRoot({ pinoHttp: { level: process.env.LOG_LEVEL || 'info' } }),

@@ -1,85 +1,70 @@
-# AI 知识管理 / AI Agent 实现说明
+# AI Knowledge Agent Implementation Notes
 
-这份实现把 Python 后端补进当前 monorepo，用来承接 SmartBar SSE、知识库上传解析、RAG 检索和部署链路。
+This implementation is a pnpm monorepo with a React frontend, shared packages and a NestJS backend. The former Python
+backend has been removed from the repository after the Node migration.
 
-## 已落地内容
+## Implemented
 
-- `backend/`：FastAPI 应用，包含 auth、workspace、library、session 四组 API。
-- `backend/app/models/entities.py`：PostgreSQL + pgvector 数据模型。
-- `backend/app/api/routes/session.py`：兼容 `/notta-brain/session/send-message`、`interrupt`、`detail`、`history`、`rate-answer`。
-- `backend/app/workers/tasks.py`：Celery 文件解析任务，负责 parse -> chunk -> embedding -> 入库。
-- `infra/docker-compose.dev.yml`：本地 PostgreSQL、Redis、MinIO。
-- `infra/docker-compose.prod.yml` 和 `infra/nginx/default.conf`：单机生产部署骨架，SSE location 已关闭 buffering。
-- `.github/workflows/ai-knowledge-agent-ci.yml`：前端 smart-bar 测试、后端 ruff、迁移和 pytest。
-- `apps/notta-brain/rsbuild.config.ts`：新增 `PYTHON_BACKEND_URL` 联调开关。
+- `apps/backend/`: NestJS API, Auth, Workspace, Library and Session modules.
+- `apps/backend/src/database/schema.ts`: PostgreSQL + pgvector schema managed by Drizzle.
+- `apps/backend/src/sessions/`: SmartBar SSE routes, replayable session events and retrieval.
+- `apps/backend/src/library/`: upload handling, Tika parsing, chunking, embedding and BullMQ workers.
+- `infra/docker-compose.dev.yml`: local PostgreSQL, Redis, MinIO and Apache Tika.
+- `infra/docker-compose.prod.yml` and `infra/nginx/default.conf`: single-host production reference.
+- `.github/workflows/ci.yml`: typecheck, tests, formatting, build and Drizzle migration verification.
 
-## 本地启动
+## Local Start
 
-启动基础设施：
-
-```bash
-docker compose -f infra/docker-compose.dev.yml up -d
-```
-
-启动后端：
+Start infrastructure:
 
 ```bash
-cd backend
-cp .env.example .env
-pip install -e ".[dev]"
-alembic upgrade head
-uvicorn app.main:app --reload
+pnpm infra:dev
 ```
 
-启动 worker：
+Start the API:
 
 ```bash
-cd backend
-celery -A app.workers.celery_app worker -l info
+cp apps/backend/.env.example apps/backend/.env
+pnpm --filter @agent/backend db:migrate
+pnpm backend:dev
 ```
 
-启动前端并接入 Python 后端：
+Start the worker and frontend in separate terminals:
 
 ```bash
-PYTHON_BACKEND_URL=http://localhost:8000 pnpm start:dev1
+pnpm backend:worker
+pnpm dev
 ```
 
-## 联调主链路
+## Main Flow
 
-1. 调 `/auth/register` 注册用户，拿到 `access_token` 和 `default_workspace_id`。
-2. 前端请求带上 `Authorization: Bearer <access_token>`。
-3. 调 `/library/files/upload?workspace_id=<workspace_id>` 上传 PDF / DOCX / PPTX / TXT / MD。
-4. worker 解析文件并写入 `document_chunks`。
-5. 调 `/notta-brain/session/send-message` 发起 SmartBar SSE。
-6. SSE 返回 `meta_info -> thinking -> citation? -> data* -> result -> task_completed -> done`。
-7. 调 `/notta-brain/session/detail` 恢复历史会话。
+1. Call `/auth/register` to create a user and receive `access_token` plus `default_workspace_id`.
+2. Send frontend requests with `Authorization: Bearer <access_token>`.
+3. Upload PDF, Office, TXT or Markdown files through `/library/files/upload?workspace_id=<workspace_id>`.
+4. The worker parses files, creates chunks and writes embeddings into `document_chunks`.
+5. Call `/notta-brain/session/send-message` to start SmartBar SSE.
+6. SSE emits `meta_info -> thinking -> citation? -> data* -> result -> task_completed -> done`.
+7. Call `/notta-brain/session/detail` to restore session history.
 
-## 生产部署
+## Production
 
-1. 云服务器安装 Docker、Docker Compose、Nginx/Certbot。
-2. 配置 `backend/.env`，生产环境必须修改 `JWT_SECRET_KEY`、数据库密码、对象存储密钥和 AI API Key。
-3. 构建前后端镜像：
+1. Configure production secrets through the deployment platform or an external `.env.production`.
+2. Build images:
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml build
+docker compose --env-file .env.production -f infra/docker-compose.prod.yml build
 ```
 
-4. 执行数据库迁移：
+3. Start services:
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml run --rm backend-api alembic upgrade head
+docker compose --env-file .env.production -f infra/docker-compose.prod.yml up -d
 ```
 
-5. 启动服务：
+## Resume Highlights
 
-```bash
-docker compose -f infra/docker-compose.prod.yml up -d
-```
-
-## 简历可写亮点
-
-- 基于 pnpm workspace 拆分 API、Domain、UI、SmartBar package，完成 AI 应用前端 monorepo 工程化。
-- 基于 FastAPI + PostgreSQL pgvector + Redis + Celery 实现知识库 RAG 后端主链路。
-- 设计 SmartBar SSE 流式协议，支持服务端 sessionId 收编、事件增量落库、历史重放和生成中断。
-- 建设文件上传解析链路，支持 PDF / Office / 文本解析、chunk 切分、embedding 入库和 workspace 级数据隔离。
-- 搭建 Docker Compose + Nginx + GitHub Actions 的开发、测试、部署闭环。
+- Built a pnpm workspace for API, Domain, UI and SmartBar packages.
+- Implemented a NestJS + PostgreSQL pgvector + Redis/BullMQ RAG backend.
+- Designed the SmartBar SSE protocol with session replay, incremental persistence and generation interruption.
+- Built a document ingestion pipeline for PDF, Office and text parsing, chunking, embeddings and workspace isolation.
+- Established Docker Compose, Nginx and GitHub Actions workflows for development, testing and deployment.

@@ -90,7 +90,7 @@ function AuthPanel(props: { client: ApiClient; onAuth: (auth: AuthResult) => voi
         </Typography.Paragraph>
         <div className="auth-metrics">
           <Metric label="Core flow" value="RAG + SSE" />
-          <Metric label="Backend" value="FastAPI" />
+          <Metric label="Backend" value="NestJS" />
           <Metric label="Deploy" value="Docker" />
         </div>
       </section>
@@ -240,7 +240,7 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
             </Typography.Title>
             <Typography.Text type="secondary">
               {view === 'chat'
-                ? 'Answers stream from FastAPI SSE and are persisted as replayable events.'
+                ? 'Answers stream from NestJS SSE and are persisted as replayable events.'
                 : view === 'library'
                   ? 'Files are parsed asynchronously and embedded into PostgreSQL pgvector.'
                   : 'Environment, model and workspace defaults for this personal project.'}
