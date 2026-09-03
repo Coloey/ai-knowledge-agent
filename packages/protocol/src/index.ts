@@ -2,7 +2,7 @@ export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface TaskStartedContent {
-  message?: string;
+  message: string;
 }
 
 export interface MetaInfoContent {
@@ -223,8 +223,7 @@ function decodeContent(type: AgentEvent['type'], value: unknown): AgentEvent['co
 
   switch (type) {
     case 'task_started':
-      requireOptionalString(content.message, 'task_started.content.message');
-      return content as TaskStartedContent;
+      return { message: requireString(content.message, 'task_started.content.message') };
     case 'meta_info':
       requireOptionalString(content.route, 'meta_info.content.route');
       return content as MetaInfoContent;

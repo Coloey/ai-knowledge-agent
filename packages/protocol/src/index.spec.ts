@@ -43,6 +43,7 @@ describe('decodeAgentEvent', () => {
 
   it.each([
     ['malformed JSON', '{'],
+    ['missing task message', JSON.stringify(event('task_started', {}))],
     ['V1 schema', JSON.stringify({ ...event('data', { chunk_id: 'chunk', text: 'x' }), schema_version: 1 })],
     ['unknown schema', JSON.stringify({ ...event('data', { chunk_id: 'chunk', text: 'x' }), schema_version: 3 })],
     ['unknown event type', JSON.stringify({ ...event('data', { chunk_id: 'chunk', text: 'x' }), type: 'unknown' })],

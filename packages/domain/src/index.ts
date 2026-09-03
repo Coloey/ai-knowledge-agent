@@ -110,6 +110,9 @@ export function reduceAgentEvent(state: ChatState, event: AgentEvent): ChatState
     if (thread.lifecycle === 'streaming') {
       return addDiagnostic(next, event, 'stale_transition', `Session ${event.session_id} already has a streaming run`, thread.id);
     }
+    if (thread.runId === event.run_id && thread.lifecycle !== 'idle') {
+      return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is already closed`, thread.id);
+    }
     return startRun(next, thread, event);
   }
 
@@ -158,6 +161,9 @@ export function stopRunLocally(state: ChatState, threadId = state.currentThreadI
 export function recordTransportError(state: ChatState, message: string, threadId = state.currentThreadId): ChatState {
   const thread = state.threads[threadId];
   if (!thread) return state;
+  if (thread.lifecycle !== 'streaming' && !(thread.lifecycle === 'idle' && Object.keys(thread.pendingUserPartIdsByRequestId).length)) {
+    return state;
+  }
   const withAnswer = thread.answerPartId ? state : ensureAnswer(state, thread, `transport:${thread.id}:${thread.partIds.length}`);
   return failRun(withAnswer, requireThread(withAnswer, thread.id), message);
 }

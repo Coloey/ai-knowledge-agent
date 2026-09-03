@@ -58,7 +58,7 @@ describe('normalized chat reducer', () => {
 
     state = reduceAgentEvent(
       state,
-      event('task_started', {}, { event_id: 'foreground-start', request_id: 'request-local', session_id: 'session-foreground', question_id: 'question-foreground', answer_id: 'answer-foreground', run_id: 'run-foreground' }),
+      event('task_started', { message: 'foreground question' }, { event_id: 'foreground-start', request_id: 'request-local', session_id: 'session-foreground', question_id: 'question-foreground', answer_id: 'answer-foreground', run_id: 'run-foreground' }),
     );
     expect(selectOrderedParts(state, 'foreground')).toMatchObject([
       { id: 'question-foreground', kind: 'user_message' },
@@ -147,6 +147,28 @@ describe('normalized chat reducer', () => {
     expect(errored.threads['session-error'].lifecycle).toBe('error');
     const repeated = recordTransportError(failed, 'offline again', 'session-1');
     const notices = selectOrderedParts(repeated, 'session-1').filter((part) => part.kind === 'system_notice');
-    expect(new Set(notices.map((notice) => notice.id)).size).toBe(2);
+    expect(repeated).toBe(failed);
+    expect(new Set(notices.map((notice) => notice.id)).size).toBe(1);
+  });
+
+  it('does not turn terminal runs back into transport failures or restart a closed run ID', () => {
+    const completed = reduce(createChatState('session-completed'), [
+      event('task_started', { message: 'completed' }, { event_id: 'start-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 0 }),
+      event('result', { final_message_chunk_id: 'message-completed', text: 'done' }, { event_id: 'result-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 1 }),
+      event('task_completed', {}, { event_id: 'complete-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 2 }),
+    ]);
+    const repeatedStart = reduceAgentEvent(completed, event('task_started', { message: 'completed' }, { event_id: 'repeat-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 3 }));
+    expect(recordTransportError(completed, 'late transport', 'session-completed')).toBe(completed);
+    expect(repeatedStart.threads['session-completed'].lifecycle).toBe('completed');
+    expect(selectOrderedParts(repeatedStart, 'session-completed')).toHaveLength(2);
+
+    let stopped = reduce(createChatState('session-stopped'), [event('task_started', { message: 'stopped' }, { event_id: 'start-stopped', session_id: 'session-stopped', run_id: 'run-stopped', seq: 0 })]);
+    stopped = stopRunLocally(stopped, 'session-stopped');
+    const errored = reduce(createChatState('session-errored'), [
+      event('task_started', { message: 'errored' }, { event_id: 'start-errored', session_id: 'session-errored', run_id: 'run-errored', seq: 0 }),
+      event('error', { message: 'failed' }, { event_id: 'error-errored', session_id: 'session-errored', run_id: 'run-errored', seq: 1 }),
+    ]);
+    expect(recordTransportError(stopped, 'late transport', 'session-stopped')).toBe(stopped);
+    expect(recordTransportError(errored, 'late transport', 'session-errored')).toBe(errored);
   });
 });
