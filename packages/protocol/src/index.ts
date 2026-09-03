@@ -10,6 +10,7 @@ export interface MetaInfoContent {
 }
 
 export interface TextContent {
+  chunk_id: string;
   text: string;
 }
 
@@ -34,6 +35,7 @@ export interface Citation {
 }
 
 export interface CitationContent {
+  message_chunk_id: string;
   citations: Citation[];
 }
 
@@ -47,7 +49,9 @@ export interface ArtifactContent {
   artifacts?: Artifact[];
 }
 
-export interface ResultContent extends TextContent {
+export interface ResultContent {
+  final_message_chunk_id: string;
+  text: string;
   artifacts?: Artifact[];
 }
 
@@ -226,7 +230,10 @@ function decodeContent(type: AgentEvent['type'], value: unknown): AgentEvent['co
       return content as MetaInfoContent;
     case 'thinking':
     case 'data':
-      return { text: requireString(content.text, `${type}.content.text`) };
+      return {
+        chunk_id: requireIdentity(content.chunk_id, `${type}.content.chunk_id`),
+        text: requireString(content.text, `${type}.content.text`),
+      };
     case 'current_tool_use':
       return {
         tool_use_id: requireIdentity(content.tool_use_id, 'current_tool_use.content.tool_use_id'),
@@ -241,11 +248,15 @@ function decodeContent(type: AgentEvent['type'], value: unknown): AgentEvent['co
         ...(isError === undefined ? {} : { is_error: isError }),
       };
     case 'citation':
-      return { citations: requireCitationArray(content.citations) };
+      return {
+        message_chunk_id: requireIdentity(content.message_chunk_id, 'citation.content.message_chunk_id'),
+        citations: requireCitationArray(content.citations),
+      };
     case 'artifact':
       return requireArtifactContent(content);
     case 'result':
       return {
+        final_message_chunk_id: requireIdentity(content.final_message_chunk_id, 'result.content.final_message_chunk_id'),
         text: requireString(content.text, 'result.content.text'),
         ...(content.artifacts === undefined ? {} : { artifacts: requireArtifactArray(content.artifacts) }),
       };

@@ -5,65 +5,23 @@ import type { AgentEvent, Artifact, Citation, JsonValue } from '@agent/protocol'
 export type ChunkStatus = 'streaming' | 'completed' | 'stopped' | 'error';
 export type ChatLifecycle = 'idle' | 'streaming' | 'result' | 'completed' | 'stopped' | 'error';
 
-export interface UserMessagePart {
-  id: string;
-  kind: 'user_message';
-  text: string;
-  questionId?: string;
-}
-
-export interface AssistantAnswerPart {
-  id: string;
-  kind: 'assistant_answer';
-  answerId: string;
-  chunkIds: string[];
-  status: ChunkStatus;
-}
-
-export interface SystemNoticePart {
-  id: string;
-  kind: 'system_notice';
-  text: string;
-  level: 'info' | 'error';
-}
-
+export interface UserMessagePart { id: string; kind: 'user_message'; text: string; questionId?: string; }
+export interface AssistantAnswerPart { id: string; kind: 'assistant_answer'; answerId: string; chunkIds: string[]; status: ChunkStatus; }
+export interface SystemNoticePart { id: string; kind: 'system_notice'; text: string; level: 'info' | 'error'; }
 export type NormalizedPart = UserMessagePart | AssistantAnswerPart | SystemNoticePart;
 
-interface BaseChunk {
-  id: string;
-  partId: string;
-  status: ChunkStatus;
-}
-
-export interface ThinkingChunk extends BaseChunk {
-  kind: 'thinking';
-  text: string;
-}
-
-export interface MessageChunk extends BaseChunk {
-  kind: 'message';
-  text: string;
-  citations: Citation[];
-}
-
-export interface ToolChunk extends BaseChunk {
-  kind: 'tool';
-  toolUseId: string;
-  name: string;
-  input?: JsonValue;
-  result?: JsonValue;
-  isError?: boolean;
-}
-
+interface BaseChunk { id: string; partId: string; status: ChunkStatus; }
+export interface ThinkingChunk extends BaseChunk { kind: 'thinking'; text: string; }
+export interface MessageChunk extends BaseChunk { kind: 'message'; text: string; citations: Citation[]; }
+export interface ToolChunk extends BaseChunk { kind: 'tool'; toolUseId: string; name: string; input?: JsonValue; result?: JsonValue; isError?: boolean; }
 export type Chunk = ThinkingChunk | MessageChunk | ToolChunk;
 
 export interface Thread {
   id: string;
-  questionId?: string;
   sessionId?: string;
   runId?: string;
   answerPartId?: string;
-  pendingUserPartId?: string;
+  pendingUserPartIdsByRequestId: Record<string, string>;
   partIds: string[];
   artifactIds: string[];
   lifecycle: ChatLifecycle;
@@ -87,8 +45,13 @@ export interface ChatState {
   lastSeqByRun: Record<string, number>;
 }
 
+export interface LocalUserMessageOptions {
+  requestId: string;
+  localPartId?: string;
+}
+
 export function createChatThread(id: string): Thread {
-  return { id, partIds: [], artifactIds: [], lifecycle: 'idle' };
+  return { id, pendingUserPartIdsByRequestId: {}, partIds: [], artifactIds: [], lifecycle: 'idle' };
 }
 
 export function createChatState(currentThreadId = 'thread-1'): ChatState {
@@ -104,14 +67,28 @@ export function createChatState(currentThreadId = 'thread-1'): ChatState {
   };
 }
 
-export function appendLocalUserMessage(state: ChatState, text: string, localPartId?: string): ChatState {
+export function appendLocalUserMessage(
+  state: ChatState,
+  text: string,
+  options: LocalUserMessageOptions | string,
+): ChatState {
+  const normalized = typeof options === 'string' ? { requestId: options } : options;
   const thread = requireThread(state, state.currentThreadId);
-  const id = localPartId || `local:${thread.id}:${thread.partIds.length}`;
-  const part: UserMessagePart = { id, kind: 'user_message', text };
+  const id = normalized.localPartId || `local:${thread.id}:${thread.partIds.length}`;
   return {
     ...state,
-    parts: { ...state.parts, [id]: part },
-    threads: { ...state.threads, [thread.id]: { ...thread, partIds: [...thread.partIds, id], pendingUserPartId: id } },
+    parts: { ...state.parts, [id]: { id, kind: 'user_message', text } },
+    threads: {
+      ...state.threads,
+      [thread.id]: {
+        ...thread,
+        runId: undefined,
+        answerPartId: undefined,
+        lifecycle: 'idle',
+        partIds: [...thread.partIds, id],
+        pendingUserPartIdsByRequestId: { ...thread.pendingUserPartIdsByRequestId, [normalized.requestId]: id },
+      },
+    },
   };
 }
 
@@ -120,42 +97,38 @@ export function reduceAgentEvent(state: ChatState, event: AgentEvent): ChatState
   const prepared = prepareEvent(state, event);
   if (prepared.stale) return prepared.state;
   let next = prepared.state;
-  let thread = findThread(next, event.question_id);
+  let thread = findThreadBySession(next, event.session_id);
 
   if (event.type === 'task_started') {
     if (!thread) {
-      const currentThread = requireThread(next, next.currentThreadId);
-      if (currentThread.pendingUserPartId) {
-        thread = currentThread;
-      } else {
-        thread = createChatThread(`thread:${event.question_id}`);
+      thread = findThreadByPendingRequest(next, event.request_id);
+      if (!thread) {
+        thread = createChatThread(event.session_id);
         next = { ...next, threads: { ...next.threads, [thread.id]: thread } };
       }
     }
-    if (thread.lifecycle === 'streaming' || (thread.runId === event.run_id && thread.lifecycle !== 'idle')) {
-      return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is already closed or active`, thread.id);
+    if (thread.lifecycle === 'streaming') {
+      return addDiagnostic(next, event, 'stale_transition', `Session ${event.session_id} already has a streaming run`, thread.id);
     }
     return startRun(next, thread, event);
   }
-  if (!thread) return addDiagnostic(next, event, 'stale_transition', `No thread is bound to question ${event.question_id}`);
-  if (thread.runId !== event.run_id) {
-    return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
-  }
+
+  if (!thread) return addDiagnostic(next, event, 'stale_transition', `No thread for session ${event.session_id}`);
+  if (event.type === 'citation') return addCitations(next, thread, event);
+  if (thread.runId !== event.run_id) return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
   if (event.type === 'task_completed') {
-    if (!['streaming', 'result', 'error', 'stopped'].includes(thread.lifecycle)) {
-      return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
-    }
-    return completeRun(next, thread);
+    return ['streaming', 'result', 'stopped', 'error'].includes(thread.lifecycle)
+      ? completeRun(next, thread)
+      : addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
   }
   if (thread.lifecycle !== 'streaming') return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
 
   switch (event.type) {
-    case 'thinking': return upsertTextChunk(next, thread, event, 'thinking', event.content.text);
-    case 'data': return upsertTextChunk(next, thread, event, 'message', event.content.text);
+    case 'thinking': return upsertTextChunk(next, thread, event, 'thinking');
+    case 'data': return upsertTextChunk(next, thread, event, 'message');
     case 'current_tool_use': return upsertToolChunk(next, thread, event);
     case 'tool_result': return mergeToolResult(next, thread, event);
-    case 'citation': return addCitations(next, thread, event);
-    case 'artifact': return addArtifacts(next, thread, event.content.artifacts || (event.content.artifact ? [event.content.artifact] : []), event.answer_id);
+    case 'artifact': return addArtifacts(next, thread, event.content.artifacts || (event.content.artifact ? [event.content.artifact] : []), event.event_id);
     case 'result': return finalizeResult(next, thread, event);
     case 'error': return failRun(next, thread, event.content.message);
     case 'meta_info':
@@ -169,24 +142,24 @@ export function reduceAgentEventBatch(state: ChatState, events: readonly AgentEv
 
 export function selectOrderedParts(state: ChatState, threadId = state.currentThreadId): NormalizedPart[] {
   const thread = state.threads[threadId];
-  return thread ? thread.partIds.flatMap((id) => (state.parts[id] ? [state.parts[id]] : [])) : [];
+  return thread ? thread.partIds.flatMap((id) => state.parts[id] ? [state.parts[id]] : []) : [];
 }
 
 export function selectOrderedChunks(state: ChatState, partId: string): Chunk[] {
   const part = state.parts[partId];
-  return part?.kind === 'assistant_answer' ? part.chunkIds.flatMap((id) => (state.chunks[id] ? [state.chunks[id]] : [])) : [];
+  return part?.kind === 'assistant_answer' ? part.chunkIds.flatMap((id) => state.chunks[id] ? [state.chunks[id]] : []) : [];
 }
 
 export function stopRunLocally(state: ChatState, threadId = state.currentThreadId): ChatState {
   const thread = state.threads[threadId];
-  return !thread || thread.lifecycle !== 'streaming' ? state : updateThreadAndAnswer(state, thread, 'stopped');
+  return !thread || thread.lifecycle !== 'streaming' ? state : updateActiveAnswer(state, thread, 'stopped');
 }
 
 export function recordTransportError(state: ChatState, message: string, threadId = state.currentThreadId): ChatState {
   const thread = state.threads[threadId];
   if (!thread) return state;
-  const next = thread.answerPartId ? state : ensureAnswer(state, thread, `transport:${thread.id}`);
-  return failRun(next, requireThread(next, threadId), message);
+  const withAnswer = thread.answerPartId ? state : ensureAnswer(state, thread, `transport:${thread.id}:${thread.partIds.length}`);
+  return failRun(withAnswer, requireThread(withAnswer, thread.id), message);
 }
 
 function prepareEvent(state: ChatState, event: AgentEvent): { state: ChatState; stale: boolean } {
@@ -204,43 +177,56 @@ function prepareEvent(state: ChatState, event: AgentEvent): { state: ChatState; 
 function startRun(state: ChatState, originalThread: Thread, event: Extract<AgentEvent, { type: 'task_started' }>): ChatState {
   let next = state;
   let thread = originalThread;
-  if (thread.pendingUserPartId) {
-    const pending = next.parts[thread.pendingUserPartId];
-    if (pending?.kind === 'user_message') {
-      const formal: UserMessagePart = { ...pending, id: event.question_id, questionId: event.question_id };
-      const parts = { ...next.parts, [event.question_id]: formal };
-      delete parts[pending.id];
-      thread = { ...thread, questionId: event.question_id, pendingUserPartId: undefined, partIds: thread.partIds.map((id) => id === pending.id ? event.question_id : id) };
-      next = { ...next, parts, threads: { ...next.threads, [thread.id]: thread } };
-    }
+  const pendingId = thread.pendingUserPartIdsByRequestId[event.request_id];
+  if (pendingId && next.parts[pendingId]?.kind === 'user_message') {
+    const pending = next.parts[pendingId] as UserMessagePart;
+    const parts = { ...next.parts, [event.question_id]: { ...pending, id: event.question_id, questionId: event.question_id } };
+    delete parts[pendingId];
+    thread = {
+      ...thread,
+      partIds: thread.partIds.map((id) => id === pendingId ? event.question_id : id),
+      pendingUserPartIdsByRequestId: omit(thread.pendingUserPartIdsByRequestId, event.request_id),
+    };
+    next = { ...next, parts, threads: { ...next.threads, [thread.id]: thread } };
+  } else if (!next.parts[event.question_id]) {
+    const user: UserMessagePart = { id: event.question_id, kind: 'user_message', text: event.content.message || '', questionId: event.question_id };
+    thread = { ...thread, partIds: [...thread.partIds, user.id] };
+    next = { ...next, parts: { ...next.parts, [user.id]: user }, threads: { ...next.threads, [thread.id]: thread } };
   }
-  const withAnswer = ensureAnswer(next, thread, event.answer_id);
-  const updated = requireThread(withAnswer, thread.id);
+  next = ensureAnswer(next, thread, event.answer_id);
+  thread = requireThread(next, thread.id);
   return {
-    ...withAnswer,
-    threads: { ...withAnswer.threads, [updated.id]: { ...updated, questionId: event.question_id, sessionId: event.session_id, runId: event.run_id, lifecycle: 'streaming' } },
+    ...next,
+    threads: {
+      ...next.threads,
+      [thread.id]: { ...thread, sessionId: event.session_id, runId: event.run_id, lifecycle: 'streaming' },
+    },
   };
 }
 
 function ensureAnswer(state: ChatState, thread: Thread, answerId: string): ChatState {
-  const existing = thread.answerPartId ? state.parts[thread.answerPartId] : undefined;
-  if (existing?.kind === 'assistant_answer' && existing.answerId === answerId) return state;
   const partId = `answer:${answerId}`;
-  const part: AssistantAnswerPart = { id: partId, kind: 'assistant_answer', answerId, chunkIds: [], status: 'streaming' };
+  const current = thread.answerPartId ? state.parts[thread.answerPartId] : undefined;
+  if (current?.kind === 'assistant_answer' && current.answerId === answerId) return state;
+  const answer: AssistantAnswerPart = { id: partId, kind: 'assistant_answer', answerId, chunkIds: [], status: 'streaming' };
   return {
     ...state,
-    parts: { ...state.parts, [partId]: part },
+    parts: { ...state.parts, [partId]: answer },
     threads: { ...state.threads, [thread.id]: { ...thread, answerPartId: partId, partIds: [...thread.partIds, partId] } },
   };
 }
 
-function upsertTextChunk(state: ChatState, thread: Thread, event: Extract<AgentEvent, { type: 'thinking' | 'data' }>, kind: 'thinking' | 'message', text: string): ChatState {
+function upsertTextChunk(
+  state: ChatState,
+  thread: Thread,
+  event: Extract<AgentEvent, { type: 'thinking' | 'data' }>,
+  kind: 'thinking' | 'message',
+): ChatState {
   const answer = requireAnswer(state, thread);
-  const id = `${kind}:${event.answer_id}`;
-  const existing = state.chunks[id];
+  const existing = state.chunks[event.content.chunk_id];
   const chunk: Chunk = kind === 'thinking'
-    ? { id, partId: answer.id, kind, text: `${existing?.kind === 'thinking' ? existing.text : ''}${text}`, status: 'streaming' }
-    : { id, partId: answer.id, kind, text: `${existing?.kind === 'message' ? existing.text : ''}${text}`, citations: existing?.kind === 'message' ? existing.citations : [], status: 'streaming' };
+    ? { id: event.content.chunk_id, partId: answer.id, kind, text: `${existing?.kind === 'thinking' ? existing.text : ''}${event.content.text}`, status: 'streaming' }
+    : { id: event.content.chunk_id, partId: answer.id, kind, text: `${existing?.kind === 'message' ? existing.text : ''}${event.content.text}`, citations: existing?.kind === 'message' ? existing.citations : [], status: 'streaming' };
   return putChunk(state, answer, chunk);
 }
 
@@ -252,7 +238,8 @@ function upsertToolChunk(state: ChatState, thread: Thread, event: Extract<AgentE
     id, partId: answer.id, kind: 'tool', toolUseId: event.content.tool_use_id, name: event.content.name,
     ...(event.content.input === undefined ? {} : { input: event.content.input }),
     ...(existing?.kind === 'tool' && existing.result !== undefined ? { result: existing.result } : {}),
-    ...(existing?.kind === 'tool' && existing.isError !== undefined ? { isError: existing.isError } : {}), status: 'streaming',
+    ...(existing?.kind === 'tool' && existing.isError !== undefined ? { isError: existing.isError } : {}),
+    status: existing?.kind === 'tool' ? existing.status : 'streaming',
   };
   return putChunk(state, answer, chunk);
 }
@@ -262,18 +249,33 @@ function mergeToolResult(state: ChatState, thread: Thread, event: Extract<AgentE
   const id = `tool:${event.answer_id}:${event.content.tool_use_id}`;
   const existing = state.chunks[id];
   if (existing?.kind !== 'tool') return addDiagnostic(state, event, 'orphan_tool_result', `No tool chunk for ${event.content.tool_use_id}`, thread.id);
-  return putChunk(state, answer, { ...existing, ...(event.content.result === undefined ? {} : { result: event.content.result }), ...(event.content.is_error === undefined ? {} : { isError: event.content.is_error }) });
+  return putChunk(state, answer, {
+    ...existing,
+    ...(event.content.result === undefined ? {} : { result: event.content.result }),
+    ...(event.content.is_error === undefined ? {} : { isError: event.content.is_error }),
+    status: event.content.is_error ? 'error' : 'completed',
+  });
 }
 
 function addCitations(state: ChatState, thread: Thread, event: Extract<AgentEvent, { type: 'citation' }>): ChatState {
-  const answer = requireAnswer(state, thread);
-  const id = `message:${event.answer_id}`;
-  const existing = state.chunks[id];
-  return putChunk(state, answer, { id, partId: answer.id, kind: 'message', text: existing?.kind === 'message' ? existing.text : '', citations: [...(existing?.kind === 'message' ? existing.citations : []), ...event.content.citations], status: 'streaming' });
+  const existing = state.chunks[event.content.message_chunk_id];
+  const answer = existing?.kind === 'message'
+    ? findAnswerForPart(state, thread, existing.partId)
+    : findAnswerById(state, thread, event.answer_id);
+  if (!answer) return addDiagnostic(state, event, 'stale_transition', `No answer for citation ${event.content.message_chunk_id}`, thread.id);
+  const chunk: MessageChunk = {
+    id: event.content.message_chunk_id,
+    partId: answer.id,
+    kind: 'message',
+    text: existing?.kind === 'message' ? existing.text : '',
+    citations: [...(existing?.kind === 'message' ? existing.citations : []), ...event.content.citations],
+    status: existing?.kind === 'message' ? existing.status : answer.status,
+  };
+  return putChunk(state, answer, chunk);
 }
 
-function addArtifacts(state: ChatState, thread: Thread, artifacts: Artifact[], answerId: string): ChatState {
-  const entries = artifacts.map((artifact, index) => [artifact.id || `artifact:${answerId}:${index}`, artifact] as const);
+function addArtifacts(state: ChatState, thread: Thread, artifacts: Artifact[], eventId: string): ChatState {
+  const entries = artifacts.map((artifact, index) => [artifact.id || `artifact:${eventId}:${index}`, artifact] as const);
   const ids = entries.map(([id]) => id);
   return {
     ...state,
@@ -284,35 +286,45 @@ function addArtifacts(state: ChatState, thread: Thread, artifacts: Artifact[], a
 
 function finalizeResult(state: ChatState, thread: Thread, event: Extract<AgentEvent, { type: 'result' }>): ChatState {
   const answer = requireAnswer(state, thread);
-  const id = `message:${event.answer_id}`;
-  const existing = state.chunks[id];
-  let next = putChunk(state, answer, { id, partId: answer.id, kind: 'message', text: event.content.text, citations: existing?.kind === 'message' ? existing.citations : [], status: 'completed' });
-  if (event.content.artifacts?.length) next = addArtifacts(next, requireThread(next, thread.id), event.content.artifacts, event.answer_id);
-  return updateThreadAndAnswer(next, requireThread(next, thread.id), 'completed', 'result');
+  const existing = state.chunks[event.content.final_message_chunk_id];
+  let next = putChunk(state, answer, {
+    id: event.content.final_message_chunk_id,
+    partId: answer.id,
+    kind: 'message',
+    text: event.content.text,
+    citations: existing?.kind === 'message' ? existing.citations : [],
+    status: 'completed',
+  });
+  if (event.content.artifacts?.length) next = addArtifacts(next, requireThread(next, thread.id), event.content.artifacts, event.event_id);
+  return updateActiveAnswer(next, requireThread(next, thread.id), 'completed', 'result');
 }
 
 function completeRun(state: ChatState, thread: Thread): ChatState {
-  return thread.lifecycle === 'error' || thread.lifecycle === 'stopped'
-    ? { ...state, threads: { ...state.threads, [thread.id]: { ...thread, lifecycle: 'completed' } } }
-    : updateThreadAndAnswer(state, thread, 'completed', 'completed');
+  return thread.lifecycle === 'stopped' || thread.lifecycle === 'error'
+    ? state
+    : updateActiveAnswer(state, thread, 'completed', 'completed');
 }
 
 function failRun(state: ChatState, thread: Thread, message: string): ChatState {
   const answer = requireAnswer(state, thread);
-  const noticeId = `notice:${thread.id}:${state.diagnostics.length}`;
+  const noticeId = `notice:${thread.id}:${thread.partIds.length}`;
   const withNotice = {
     ...state,
     parts: { ...state.parts, [noticeId]: { id: noticeId, kind: 'system_notice' as const, text: message, level: 'error' as const } },
     threads: { ...state.threads, [thread.id]: { ...thread, partIds: [...thread.partIds, noticeId] } },
   };
-  return updateThreadAndAnswer(withNotice, { ...thread, answerPartId: answer.id, partIds: [...thread.partIds, noticeId] }, 'error');
+  return updateActiveAnswer(withNotice, { ...thread, answerPartId: answer.id, partIds: [...thread.partIds, noticeId] }, 'error');
 }
 
-function updateThreadAndAnswer(state: ChatState, thread: Thread, status: ChunkStatus, lifecycle: ChatLifecycle = status): ChatState {
+function updateActiveAnswer(state: ChatState, thread: Thread, status: ChunkStatus, lifecycle: ChatLifecycle = status): ChatState {
   const answer = thread.answerPartId ? state.parts[thread.answerPartId] : undefined;
-  const chunks = Object.fromEntries(Object.entries(state.chunks).map(([id, chunk]) => [id, chunk.partId === thread.answerPartId && chunk.status === 'streaming' ? { ...chunk, status } : chunk])) as Record<string, Chunk>;
+  const chunks = Object.fromEntries(Object.entries(state.chunks).map(([id, chunk]) => [
+    id,
+    chunk.partId === thread.answerPartId && chunk.status === 'streaming' ? { ...chunk, status } : chunk,
+  ])) as Record<string, Chunk>;
   return {
-    ...state, chunks,
+    ...state,
+    chunks,
     parts: answer?.kind === 'assistant_answer' ? { ...state.parts, [answer.id]: { ...answer, status } } : state.parts,
     threads: { ...state.threads, [thread.id]: { ...thread, lifecycle } },
   };
@@ -320,7 +332,29 @@ function updateThreadAndAnswer(state: ChatState, thread: Thread, status: ChunkSt
 
 function putChunk(state: ChatState, answer: AssistantAnswerPart, chunk: Chunk): ChatState {
   const hasChunk = answer.chunkIds.includes(chunk.id);
-  return { ...state, chunks: { ...state.chunks, [chunk.id]: chunk }, parts: { ...state.parts, [answer.id]: { ...answer, chunkIds: hasChunk ? answer.chunkIds : [...answer.chunkIds, chunk.id] } } };
+  return {
+    ...state,
+    chunks: { ...state.chunks, [chunk.id]: chunk },
+    parts: { ...state.parts, [answer.id]: { ...answer, chunkIds: hasChunk ? answer.chunkIds : [...answer.chunkIds, chunk.id] } },
+  };
+}
+
+function findThreadBySession(state: ChatState, sessionId: string): Thread | undefined {
+  return Object.values(state.threads).find((thread) => thread.sessionId === sessionId || thread.id === sessionId);
+}
+
+function findThreadByPendingRequest(state: ChatState, requestId: string): Thread | undefined {
+  return Object.values(state.threads).find((thread) => thread.pendingUserPartIdsByRequestId[requestId] !== undefined);
+}
+
+function findAnswerById(state: ChatState, thread: Thread, answerId: string): AssistantAnswerPart | undefined {
+  return thread.partIds.map((id) => state.parts[id]).find((part): part is AssistantAnswerPart => part?.kind === 'assistant_answer' && part.answerId === answerId);
+}
+
+function findAnswerForPart(state: ChatState, thread: Thread, partId: string): AssistantAnswerPart | undefined {
+  return thread.partIds.includes(partId) && state.parts[partId]?.kind === 'assistant_answer'
+    ? state.parts[partId] as AssistantAnswerPart
+    : undefined;
 }
 
 function requireThread(state: ChatState, id: string): Thread {
@@ -329,12 +363,16 @@ function requireThread(state: ChatState, id: string): Thread {
   return thread;
 }
 
-function findThread(state: ChatState, questionId: string): Thread | undefined { return Object.values(state.threads).find((thread) => thread.questionId === questionId); }
-
 function requireAnswer(state: ChatState, thread: Thread): AssistantAnswerPart {
   const answer = thread.answerPartId ? state.parts[thread.answerPartId] : undefined;
-  if (answer?.kind !== 'assistant_answer') throw new Error(`Missing answer for thread ${thread.id}`);
+  if (answer?.kind !== 'assistant_answer') throw new Error(`Missing active answer for thread ${thread.id}`);
   return answer;
+}
+
+function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record };
+  delete next[key];
+  return next;
 }
 
 function addDiagnostic(state: ChatState, event: AgentEvent, kind: Diagnostic['kind'], message: string, threadId?: string): ChatState {
