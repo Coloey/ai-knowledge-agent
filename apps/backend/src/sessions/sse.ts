@@ -1,12 +1,8 @@
-export interface SessionEvent {
-  type: string;
-  session_id: string;
-  content: Record<string, unknown>;
-}
+import { decodeAgentEvent, type AgentEvent } from '@agent/protocol';
 
-export function sseData(payload: SessionEvent, sequence?: number): string {
-  const id = sequence === undefined ? '' : `id: ${sequence}\n`;
-  return `${id}data: ${JSON.stringify(payload)}\n\n`;
+export function sseData(payload: AgentEvent): string {
+  const event = decodeAgentEvent(JSON.stringify(payload));
+  return `id: ${event.event_id}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 export function sseDone(): string {

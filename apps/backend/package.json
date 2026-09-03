@@ -18,6 +18,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm --filter @agent/protocol build",
     "test": "vitest run",
+    "pretest:watch": "pnpm --filter @agent/protocol build",
     "test:watch": "vitest",
     "format": "prettier --write \"{src,test}/**/*.ts\" \"*.{json,ts}\"",
     "format:check": "prettier --check \"{src,test}/**/*.ts\" \"*.{json,ts}\"",

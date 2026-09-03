@@ -1,5 +1,6 @@
 import type { ServerResponse } from 'node:http';
 
+import type { AgentEvent } from '@agent/protocol';
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, desc, eq } from 'drizzle-orm';
@@ -8,31 +9,37 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import type { Environment } from '../config/environment';
 import { DatabaseService } from '../database/database.service';
 import { newId } from '../database/id';
-import { chatAnswerEvents, chatAnswers, chatQuestions, chatSessions, users } from '../database/schema';
+import { chatAnswers, chatQuestions, chatSessions, users } from '../database/schema';
 import { WorkspacesService } from '../workspaces/workspaces.service';
+import { LlmService } from './llm.service';
+import { RetrievalService } from './retrieval.service';
+import { SessionControlService } from './session-control.service';
+import type { SessionRunIdentity, TerminalRunInput } from './session-event-journal.service';
+import { SessionEventJournal } from './session-event-journal.service';
 import type {
   RateAnswerRequestDto,
   SendMessageRequestDto,
   SessionDetailRequestDto,
   SessionHistoryRequestDto,
 } from './session.dto';
-import { LlmService } from './llm.service';
-import { RetrievalService } from './retrieval.service';
-import { SessionControlService } from './session-control.service';
-import { sseData, sseDone, timestampMs, type SessionEvent } from './sse';
+import { sseData, sseDone, timestampMs } from './sse';
 
-interface StreamContext {
-  sessionId: string;
-  answerId: string;
+export const MAX_TEXT_DELTA_CHARS = 1_024;
+
+type EventType = AgentEvent['type'];
+type EventOf<TType extends EventType> = Extract<AgentEvent, { type: TType }>;
+
+export interface StreamContext {
+  identity: SessionRunIdentity;
   question: string;
-  requestId?: string;
-  replay?: Array<{ type: string; contentJson: Record<string, unknown>; seq: number }>;
+  replay?: AgentEvent[];
 }
 
 @Injectable()
 export class SessionsService {
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
+    @Inject(SessionEventJournal) private readonly journal: SessionEventJournal,
     @Inject(WorkspacesService) private readonly workspaces: WorkspacesService,
     @Inject(RetrievalService) private readonly retrieval: RetrievalService,
     @Inject(LlmService) private readonly llm: LlmService,
@@ -46,8 +53,12 @@ export class SessionsService {
       const existing = await this.database.db
         .select({
           sessionId: chatSessions.id,
-          answerId: chatAnswers.id,
+          workspaceId: chatSessions.workspaceId,
+          questionId: chatQuestions.id,
+          requestId: chatQuestions.requestId,
           question: chatQuestions.message,
+          answerId: chatAnswers.id,
+          runId: chatAnswers.runId,
           answerStatus: chatAnswers.status,
         })
         .from(chatQuestions)
@@ -56,19 +67,26 @@ export class SessionsService {
         .where(and(eq(chatQuestions.requestId, input.request_id), eq(chatSessions.workspaceId, input.workspace_id)))
         .limit(1);
       if (existing[0]) {
-        if (existing[0].answerStatus === 'streaming') {
-          throw new ConflictException('A response for this request is still being generated');
-        }
-        const replay = await this.database.db
-          .select({ type: chatAnswerEvents.type, contentJson: chatAnswerEvents.contentJson, seq: chatAnswerEvents.seq })
-          .from(chatAnswerEvents)
-          .where(eq(chatAnswerEvents.answerId, existing[0].answerId))
-          .orderBy(asc(chatAnswerEvents.seq));
-        return {
+        const identity = {
+          requestId: existing[0].requestId || input.request_id,
+          workspaceId: existing[0].workspaceId,
           sessionId: existing[0].sessionId,
+          questionId: existing[0].questionId,
           answerId: existing[0].answerId,
+          runId: existing[0].runId,
+        };
+        let replay = await this.journal.read(existing[0].answerId);
+        if (existing[0].answerStatus === 'streaming') {
+          const result = replay.find((event): event is EventOf<'result'> => event.type === 'result');
+          const error = replay.find((event): event is EventOf<'error'> => event.type === 'error');
+          if (result) await this.journal.succeed(identity, result.content);
+          else if (error) await this.journal.fail(identity, error.content);
+          else throw new ConflictException('A response for this request is still being generated');
+          replay = await this.journal.read(existing[0].answerId);
+        }
+        return {
+          identity,
           question: existing[0].question,
-          requestId: input.request_id,
           replay,
         };
       }
@@ -90,101 +108,158 @@ export class SessionsService {
           title: input.message.slice(0, 40) || 'New chat',
         });
       }
+      const requestId = input.request_id || newId('request');
       const questionId = newId('question');
       const answerId = newId('answer');
+      const runId = newId('run');
+      const startedAt = new Date();
       await tx.insert(chatQuestions).values({
         id: questionId,
         sessionId,
-        requestId: input.request_id,
+        requestId,
         message: input.message,
         optionsJson: input.options,
         timezoneOffset: input.timezone_offset,
       });
-      await tx.insert(chatAnswers).values({ id: answerId, sessionId, questionId, status: 'streaming' });
-      return { sessionId, answerId, question: input.message, requestId: input.request_id };
+      await tx.insert(chatAnswers).values({
+        id: answerId,
+        sessionId,
+        questionId,
+        runId,
+        status: 'streaming',
+        startedAt,
+      });
+      return {
+        identity: {
+          requestId,
+          workspaceId: input.workspace_id,
+          sessionId,
+          questionId,
+          answerId,
+          runId,
+        },
+        question: input.message,
+      };
     });
   }
 
   async stream(context: StreamContext, response: ServerResponse, abort: AbortController): Promise<void> {
     if (context.replay !== undefined) {
-      for (const event of context.replay) {
-        this.write(
-          response,
-          sseData({ type: event.type, session_id: context.sessionId, content: event.contentJson }, event.seq),
-        );
-      }
+      for (const event of context.replay) this.write(response, sseData(event));
       this.write(response, sseDone());
       response.end();
       return;
     }
 
-    let sequence = 0;
     const heartbeat = setInterval(
       () => this.write(response, `: heartbeat ${Date.now()}\n\n`),
       this.config.get('SSE_HEARTBEAT_SECONDS', { infer: true }) * 1_000,
     );
-    const emit = async (type: string, content: Record<string, unknown>, persist = true): Promise<void> => {
-      sequence += 1;
-      const event: SessionEvent = { type, session_id: context.sessionId, content };
-      if (persist) {
-        await this.database.db.insert(chatAnswerEvents).values({
-          id: newId('event'),
-          answerId: context.answerId,
-          type,
-          contentJson: content,
-          seq: sequence,
-        });
-      }
-      this.write(response, sseData(event, sequence));
-    };
-
-    await this.control.clear(context.sessionId);
+    const messageChunkId = `message_${context.identity.answerId}`;
     let fullText = '';
+    let pendingText = '';
+    let completed = false;
+
+    const emit = async <TType extends EventType>(
+      type: TType,
+      content: EventOf<TType>['content'],
+    ): Promise<EventOf<TType>> => {
+      const event = await this.journal.append<TType>(context.identity, type, content as never);
+      this.write(response, sseData(event));
+      return event;
+    };
+    const flushText = async (): Promise<void> => {
+      while (pendingText.length) {
+        const delta = pendingText.slice(0, MAX_TEXT_DELTA_CHARS);
+        pendingText = pendingText.slice(delta.length);
+        await emit('data', { chunk_id: messageChunkId, text: delta });
+      }
+    };
+    const complete = async (terminal: TerminalRunInput): Promise<void> => {
+      const outcome = await this.journal.complete(context.identity, terminal);
+      completed = true;
+      if (outcome?.appended) this.write(response, sseData(outcome.event));
+    };
+    const interrupted = async (): Promise<boolean> =>
+      abort.signal.aborted || (await this.control.isInterrupted(context.identity.sessionId));
+
     try {
-      await emit('meta_info', { route: 'rag', request_id: context.requestId });
-      await emit('thinking', { text: '正在检索知识库...' });
-      const contexts = await this.retrieval.retrieve(await this.workspaceId(context.sessionId), context.question);
+      await this.control.clear(context.identity.sessionId);
+      await emit('task_started', { message: context.question });
+      await emit('meta_info', { route: 'rag' });
+      await emit('thinking', {
+        chunk_id: `thinking_${context.identity.answerId}_retrieval`,
+        text: '正在检索知识库...',
+      });
+      const contexts = await this.retrieval.retrieve(context.identity.workspaceId, context.question);
       if (contexts.length) {
         await emit('citation', {
+          message_chunk_id: messageChunkId,
           citations: contexts.map((item) => ({
             id: item.chunk_id,
             file_id: item.file_id,
             title: item.file_title,
-            page: item.page,
+            page: item.page ?? undefined,
             snippet: item.content.slice(0, 240),
           })),
         });
       } else {
-        await emit('thinking', { text: '当前知识库没有命中内容，将基于通用能力回答。' });
+        await emit('thinking', {
+          chunk_id: `thinking_${context.identity.answerId}_fallback`,
+          text: '当前知识库没有命中内容，将基于通用能力回答。',
+        });
       }
 
       for await (const token of this.llm.streamAnswer(context.question, contexts, abort.signal)) {
-        if (abort.signal.aborted || (await this.control.isInterrupted(context.sessionId))) {
+        if (await interrupted()) {
           abort.abort();
-          await this.updateAnswerStatus(context.answerId, 'interrupted');
-          await emit('task_completed', { message: 'interrupted' });
+          await flushText();
+          await complete({ status: 'interrupted', terminalReason: 'interrupted', message: 'interrupted' });
           this.write(response, sseDone());
           return;
         }
         fullText += token;
-        await emit('data', { text: token }, false);
+        pendingText += token;
+        while (pendingText.length >= MAX_TEXT_DELTA_CHARS) {
+          const delta = pendingText.slice(0, MAX_TEXT_DELTA_CHARS);
+          pendingText = pendingText.slice(MAX_TEXT_DELTA_CHARS);
+          await emit('data', { chunk_id: messageChunkId, text: delta });
+        }
       }
 
-      // Persist one aggregate data event for replay instead of one row per token.
-      await this.persistEvent(context.answerId, 'data', { text: fullText }, ++sequence);
-      await this.updateAnswerStatus(context.answerId, 'finished');
-      await emit('result', { text: fullText });
-      await emit('task_completed', { message: 'done' });
+      if (await interrupted()) {
+        abort.abort();
+        await flushText();
+        await complete({ status: 'interrupted', terminalReason: 'interrupted', message: 'interrupted' });
+        this.write(response, sseDone());
+        return;
+      }
+
+      await flushText();
+      const terminal = await this.journal.succeed(context.identity, {
+        final_message_chunk_id: messageChunkId,
+        text: fullText,
+      });
+      completed = true;
+      if (terminal.signal.appended) this.write(response, sseData(terminal.signal.event));
+      if (terminal.completion.appended) this.write(response, sseData(terminal.completion.event));
       this.write(response, sseDone());
     } catch (error) {
-      await this.updateAnswerStatus(context.answerId, abort.signal.aborted ? 'interrupted' : 'failed');
-      if (!response.writableEnded && !abort.signal.aborted) {
-        await emit('error', {
-          error_code: 43106,
-          message: error instanceof Error ? error.message : 'Generation failed',
-        });
-        this.write(response, sseDone());
+      if (!completed) {
+        await flushText();
+        if (abort.signal.aborted) {
+          await complete({ status: 'interrupted', terminalReason: 'interrupted', message: 'interrupted' });
+        } else {
+          const terminal = await this.journal.fail(context.identity, {
+            error_code: 43106,
+            message: error instanceof Error ? error.message : 'Generation failed',
+          });
+          completed = true;
+          if (terminal.signal.appended) this.write(response, sseData(terminal.signal.event));
+          if (terminal.completion.appended) this.write(response, sseData(terminal.completion.event));
+        }
       }
+      this.write(response, sseDone());
     } finally {
       clearInterval(heartbeat);
       if (!response.writableEnded) response.end();
@@ -212,13 +287,7 @@ export class SessionsService {
       const answer = await this.database.db.query.chatAnswers.findFirst({
         where: eq(chatAnswers.questionId, question.id),
       });
-      const events = answer
-        ? await this.database.db
-            .select()
-            .from(chatAnswerEvents)
-            .where(eq(chatAnswerEvents.answerId, answer.id))
-            .orderBy(asc(chatAnswerEvents.seq))
-        : [];
+      const events = answer ? await this.journal.read(answer.id) : [];
       messages.push({
         question: {
           question_id: question.id,
@@ -234,7 +303,7 @@ export class SessionsService {
         answer: {
           session_id: session.id,
           answer_id: answer?.id || '',
-          message: events.map((event) => ({ type: event.type, session_id: session.id, content: event.contentJson })),
+          message: events,
           status: answer?.status || 'missing',
           rating: answer?.rating ?? null,
           created_time: timestampMs(answer?.createdAt),
@@ -289,12 +358,6 @@ export class SessionsService {
     return { answer_id: answer.id, rating: input.rating ?? null };
   }
 
-  private async workspaceId(sessionId: string): Promise<string> {
-    const session = await this.database.db.query.chatSessions.findFirst({ where: eq(chatSessions.id, sessionId) });
-    if (!session) throw new NotFoundException('Session not found');
-    return session.workspaceId;
-  }
-
   private async requireSession(workspaceId: string, sessionId: string) {
     const session = await this.database.db.query.chatSessions.findFirst({
       where: and(eq(chatSessions.id, sessionId), eq(chatSessions.workspaceId, workspaceId)),
@@ -303,25 +366,12 @@ export class SessionsService {
     return session;
   }
 
-  private async persistEvent(
-    answerId: string,
-    type: string,
-    content: Record<string, unknown>,
-    seq: number,
-  ): Promise<void> {
-    await this.database.db
-      .insert(chatAnswerEvents)
-      .values({ id: newId('event'), answerId, type, contentJson: content, seq });
-  }
-
-  private async updateAnswerStatus(answerId: string, status: string): Promise<void> {
-    await this.database.db
-      .update(chatAnswers)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(chatAnswers.id, answerId));
-  }
-
   private write(response: ServerResponse, data: string): void {
-    if (!response.writableEnded && !response.destroyed) response.write(data);
+    if (response.writableEnded || response.destroyed) return;
+    try {
+      response.write(data);
+    } catch {
+      // The journal is authoritative; a disconnected SSE consumer can replay later.
+    }
   }
 }

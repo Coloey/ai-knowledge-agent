@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   index,
@@ -159,7 +159,7 @@ export const chatQuestions = pgTable(
     sessionId: varchar('session_id', { length: 64 })
       .notNull()
       .references(() => chatSessions.id, { onDelete: 'cascade' }),
-    requestId: varchar('request_id', { length: 128 }),
+    requestId: varchar('request_id', { length: 128 }).notNull(),
     message: text('message').notNull(),
     optionsJson: jsonb('options_json').$type<Record<string, unknown>>().default({}).notNull(),
     timezoneOffset: integer('timezone_offset').default(0).notNull(),
@@ -181,6 +181,11 @@ export const chatAnswers = pgTable(
     questionId: varchar('question_id', { length: 64 })
       .notNull()
       .references(() => chatQuestions.id, { onDelete: 'cascade' }),
+    runId: varchar('run_id', { length: 64 }).notNull(),
+    lastEventSeq: integer('last_event_seq').default(-1).notNull(),
+    terminalReason: varchar('terminal_reason', { length: 64 }),
+    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
     status: varchar('status', { length: 32 }).default('streaming').notNull(),
     rating: integer('rating'),
     ...timestamps,
@@ -198,6 +203,7 @@ export const chatAnswerEvents = pgTable(
     answerId: varchar('answer_id', { length: 64 })
       .notNull()
       .references(() => chatAnswers.id, { onDelete: 'cascade' }),
+    schemaVersion: integer('schema_version').default(2).notNull(),
     type: varchar('type', { length: 64 }).notNull(),
     contentJson: jsonb('content_json').$type<Record<string, unknown>>().default({}).notNull(),
     seq: integer('seq').notNull(),
@@ -205,6 +211,9 @@ export const chatAnswerEvents = pgTable(
   },
   (table) => [
     uniqueIndex('uq_chat_answer_events_answer_seq').on(table.answerId, table.seq),
+    uniqueIndex('uq_chat_answer_events_terminal_type')
+      .on(table.answerId, table.type)
+      .where(sql`${table.schemaVersion} = 2 and ${table.type} in ('result', 'task_completed')`),
     index('ix_chat_answer_events_type').on(table.type),
   ],
 );
