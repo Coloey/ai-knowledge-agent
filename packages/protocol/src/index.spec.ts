@@ -71,6 +71,15 @@ describe('createSseDecoder', () => {
     expect(frames).toEqual([{ id: 'event_1', event: 'message', retry: 1500, data: 'first\nsecond' }]);
   });
 
+  it('ignores retry values that are not non-negative safe integers', () => {
+    const frames: SseFrame[] = [];
+    const decoder = createSseDecoder((frame) => frames.push(frame));
+
+    decoder.push(new TextEncoder().encode('retry: 999999999999999999999\ndata: first\n\nretry: 1500\ndata: second\n\n'));
+
+    expect(frames).toEqual([{ data: 'first' }, { retry: 1500, data: 'second' }]);
+  });
+
   it('preserves UTF-8 characters split between byte chunks', () => {
     const frames: SseFrame[] = [];
     const bytes = new TextEncoder().encode('data: 你好\n\n');

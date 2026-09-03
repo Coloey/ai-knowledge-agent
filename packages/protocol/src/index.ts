@@ -179,7 +179,10 @@ export function createSseDecoder(onFrame: (frame: SseFrame) => void): SseDecoder
       if (field === 'data') data.push(value);
       if (field === 'id') id = value;
       if (field === 'event') event = value;
-      if (field === 'retry' && /^\d+$/.test(value)) retry = Number(value);
+      if (field === 'retry' && /^\d+$/.test(value)) {
+        const parsedRetry = Number(value);
+        if (Number.isSafeInteger(parsedRetry) && parsedRetry >= 0) retry = parsedRetry;
+      }
     }
 
     if (!data.length) return;

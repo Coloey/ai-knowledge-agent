@@ -197,6 +197,9 @@ importers:
 
   packages/domain:
     dependencies:
+      '@agent/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       zustand:
         specifier: ^5.0.8
         version: 5.0.14(@types/react@18.3.31)(react@18.3.1)

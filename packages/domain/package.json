@@ -9,6 +9,7 @@
     "test": "tsc --noEmit"
   },
   "dependencies": {
+    "@agent/protocol": "workspace:*",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
