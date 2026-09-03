@@ -15,6 +15,7 @@
     "paths": {
       "@agent/api": ["packages/api/src/index.tsx"],
       "@agent/domain": ["packages/domain/src/index.ts"],
+      "@agent/protocol": ["packages/protocol/src/index.ts"],
       "@agent/smart-bar": ["packages/smart-bar/src/index.tsx"],
       "@agent/ui": ["packages/ui/src/index.tsx"]
     },
