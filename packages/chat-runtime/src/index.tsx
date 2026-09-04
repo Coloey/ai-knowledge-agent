@@ -7,7 +7,7 @@ import React, {
   useSyncExternalStore,
 } from 'react';
 
-import { type ApiClient, useApiClient } from '@agent/api';
+import { useApiClient } from '@agent/api';
 import {
   appendLocalUserMessage,
   type ChatState,
@@ -633,7 +633,7 @@ export function ChatRuntimeProvider(props: ChatRuntimeProviderProps) {
     () =>
       new ChatRuntime({
         workspaceId: props.workspaceId,
-        transport: new FetchSseTransport(api as ApiClient),
+        transport: new FetchSseTransport(api),
         ...(props.initialThreadId
           ? { initialThreadId: props.initialThreadId }
           : {}),

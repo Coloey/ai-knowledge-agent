@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -19,11 +19,11 @@ import {
 import type { UploadProps } from 'antd';
 
 import {
-  ApiClient,
   ApiProvider,
   AuthExpiredError,
   AuthResult,
   LibraryFileDTO,
+  useApiClient,
   WorkspaceDTO,
 } from '@agent/api';
 import { ChatRuntimeProvider } from '@agent/chat-runtime';
@@ -41,11 +41,6 @@ export function App() {
     return raw ? (JSON.parse(raw) as AuthResult) : null;
   });
 
-  const client = useMemo(
-    () => new ApiClient({ baseURL: API_BASE_URL, token: auth?.access_token }),
-    [auth],
-  );
-
   function handleAuth(nextAuth: AuthResult) {
     setAuth(nextAuth);
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuth));
@@ -59,20 +54,18 @@ export function App() {
   return (
     <ApiProvider baseURL={API_BASE_URL} token={auth?.access_token}>
       {!auth ? (
-        <AuthPanel client={client} onAuth={handleAuth} />
+        <AuthPanel onAuth={handleAuth} />
       ) : (
         <AppShell title="AI Knowledge Agent">
-          <WorkspacePanel auth={auth} client={client} onLogout={logout} />
+          <WorkspacePanel auth={auth} onLogout={logout} />
         </AppShell>
       )}
     </ApiProvider>
   );
 }
 
-function AuthPanel(props: {
-  client: ApiClient;
-  onAuth: (auth: AuthResult) => void;
-}) {
+function AuthPanel(props: { onAuth: (auth: AuthResult) => void }) {
+  const client = useApiClient();
   const [mode, setMode] = useState<'login' | 'register'>('register');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -85,7 +78,7 @@ function AuthPanel(props: {
     setError('');
     setSubmitting(true);
     try {
-      const auth = await props.client.post<AuthResult>(
+      const auth = await client.post<AuthResult>(
         mode === 'register' ? '/auth/register' : '/auth/login',
         {
           email: values.email,
@@ -175,9 +168,9 @@ function AuthPanel(props: {
 
 function WorkspacePanel(props: {
   auth: AuthResult;
-  client: ApiClient;
   onLogout: () => void;
 }) {
+  const client = useApiClient();
   const [view, setView] = useState<ViewKey>('chat');
   const [workspace, setWorkspace] = useState<WorkspaceDTO | null>(null);
   const [files, setFiles] = useState<LibraryFileDTO[]>([]);
@@ -187,7 +180,7 @@ function WorkspacePanel(props: {
 
   async function refresh() {
     setError('');
-    const workspaces = await props.client.get<WorkspaceDTO[]>('/workspaces');
+    const workspaces = await client.get<WorkspaceDTO[]>('/workspaces');
     const current =
       workspaces.find(
         (item) => item.workspace_id === props.auth.default_workspace_id,
@@ -195,7 +188,7 @@ function WorkspacePanel(props: {
     setWorkspace(current || null);
     if (current) {
       setFiles(
-        await props.client.get<LibraryFileDTO[]>(
+        await client.get<LibraryFileDTO[]>(
           `/library/files?workspace_id=${current.workspace_id}`,
         ),
       );
@@ -248,7 +241,7 @@ function WorkspacePanel(props: {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        await props.client.upload<LibraryFileDTO>(
+        await client.upload<LibraryFileDTO>(
           `/library/files/upload?workspace_id=${workspace.workspace_id}`,
           formData,
         );
