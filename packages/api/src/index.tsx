@@ -99,7 +99,9 @@ export class ApiClient {
     const response = await fetch(`${this.options.baseURL}${path}`, {
       method: 'POST',
       headers: {
-        ...(this.options.token ? { Authorization: `Bearer ${this.options.token}` } : {}),
+        ...(this.options.token
+          ? { Authorization: `Bearer ${this.options.token}` }
+          : {}),
       },
       body: formData,
     });
@@ -128,7 +130,9 @@ export class ApiClient {
   private headers(): HeadersInit {
     return {
       'Content-Type': 'application/json',
-      ...(this.options.token ? { Authorization: `Bearer ${this.options.token}` } : {}),
+      ...(this.options.token
+        ? { Authorization: `Bearer ${this.options.token}` }
+        : {}),
     };
   }
 }
@@ -136,7 +140,11 @@ export class ApiClient {
 function extractErrorMessage(payload: ApiResponse<unknown>, fallback: string) {
   if (payload.msg) return payload.msg;
   if (Array.isArray(payload.detail) && payload.detail[0]?.msg) {
-    const field = Array.isArray(payload.detail[0].loc) ? payload.detail[0].loc.filter((part: string) => part !== 'body').join('.') : '';
+    const field = Array.isArray(payload.detail[0].loc)
+      ? payload.detail[0].loc
+          .filter((part: string) => part !== 'body')
+          .join('.')
+      : '';
     return field ? `${field}: ${payload.detail[0].msg}` : payload.detail[0].msg;
   }
   return fallback;
@@ -146,10 +154,16 @@ const ApiContext = createContext<ApiClient | null>(null);
 
 export function ApiProvider(props: React.PropsWithChildren<ApiClientOptions>) {
   const client = useMemo(
-    () => new ApiClient({ baseURL: props.baseURL, ...(props.token ? { token: props.token } : {}) }),
+    () =>
+      new ApiClient({
+        baseURL: props.baseURL,
+        ...(props.token ? { token: props.token } : {}),
+      }),
     [props.baseURL, props.token],
   );
-  return <ApiContext.Provider value={client}>{props.children}</ApiContext.Provider>;
+  return (
+    <ApiContext.Provider value={client}>{props.children}</ApiContext.Provider>
+  );
 }
 
 export function useApiClient(): ApiClient {

@@ -18,7 +18,14 @@ import {
 } from 'antd';
 import type { UploadProps } from 'antd';
 
-import { ApiClient, ApiProvider, AuthExpiredError, AuthResult, LibraryFileDTO, WorkspaceDTO } from '@agent/api';
+import {
+  ApiClient,
+  ApiProvider,
+  AuthExpiredError,
+  AuthResult,
+  LibraryFileDTO,
+  WorkspaceDTO,
+} from '@agent/api';
 import { ChatRuntimeProvider } from '@agent/chat-runtime';
 import { SmartBar } from '@agent/smart-bar';
 import { AppShell } from '@agent/ui';
@@ -34,7 +41,10 @@ export function App() {
     return raw ? (JSON.parse(raw) as AuthResult) : null;
   });
 
-  const client = useMemo(() => new ApiClient({ baseURL: API_BASE_URL, token: auth?.access_token }), [auth]);
+  const client = useMemo(
+    () => new ApiClient({ baseURL: API_BASE_URL, token: auth?.access_token }),
+    [auth],
+  );
 
   function handleAuth(nextAuth: AuthResult) {
     setAuth(nextAuth);
@@ -59,20 +69,30 @@ export function App() {
   );
 }
 
-function AuthPanel(props: { client: ApiClient; onAuth: (auth: AuthResult) => void }) {
+function AuthPanel(props: {
+  client: ApiClient;
+  onAuth: (auth: AuthResult) => void;
+}) {
   const [mode, setMode] = useState<'login' | 'register'>('register');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  async function submit(values: { email: string; password: string; name?: string }) {
+  async function submit(values: {
+    email: string;
+    password: string;
+    name?: string;
+  }) {
     setError('');
     setSubmitting(true);
     try {
-      const auth = await props.client.post<AuthResult>(mode === 'register' ? '/auth/register' : '/auth/login', {
-        email: values.email,
-        password: values.password,
-        name: values.name || 'User',
-      });
+      const auth = await props.client.post<AuthResult>(
+        mode === 'register' ? '/auth/register' : '/auth/login',
+        {
+          email: values.email,
+          password: values.password,
+          name: values.name || 'User',
+        },
+      );
       props.onAuth(auth);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Auth failed');
@@ -85,9 +105,12 @@ function AuthPanel(props: { client: ApiClient; onAuth: (auth: AuthResult) => voi
     <main className="auth-page">
       <section className="auth-copy">
         <Tag color="blue">Full-stack AI Agent</Tag>
-        <Typography.Title>Knowledge workspace for private documents</Typography.Title>
+        <Typography.Title>
+          Knowledge workspace for private documents
+        </Typography.Title>
         <Typography.Paragraph>
-          Upload source files, index them into a vector knowledge base, and ask SmartBar for cited answers over SSE.
+          Upload source files, index them into a vector knowledge base, and ask
+          SmartBar for cited answers over SSE.
         </Typography.Paragraph>
         <div className="auth-metrics">
           <Metric label="Core flow" value="RAG + SSE" />
@@ -96,7 +119,10 @@ function AuthPanel(props: { client: ApiClient; onAuth: (auth: AuthResult) => voi
         </div>
       </section>
 
-      <Card className="auth-card" title={mode === 'register' ? 'Create account' : 'Login'}>
+      <Card
+        className="auth-card"
+        title={mode === 'register' ? 'Create account' : 'Login'}
+      >
         <Space direction="vertical" className="full-width" size={16}>
           {error ? <Alert type="error" message={error} /> : null}
           <Form layout="vertical" onFinish={submit}>
@@ -105,18 +131,41 @@ function AuthPanel(props: { client: ApiClient; onAuth: (auth: AuthResult) => voi
                 <Input size="large" />
               </Form.Item>
             ) : null}
-            <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
+            <Form.Item
+              name="email"
+              label="Email"
+              rules={[{ required: true, type: 'email' }]}
+            >
               <Input size="large" placeholder="you@example.com" />
             </Form.Item>
-            <Form.Item name="password" label="Password" rules={[{ required: true, min: 8 }]}>
-              <Input.Password size="large" placeholder="At least 8 characters" />
+            <Form.Item
+              name="password"
+              label="Password"
+              rules={[{ required: true, min: 8 }]}
+            >
+              <Input.Password
+                size="large"
+                placeholder="At least 8 characters"
+              />
             </Form.Item>
-            <Button type="primary" htmlType="submit" loading={submitting} block size="large">
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={submitting}
+              block
+              size="large"
+            >
               {mode === 'register' ? 'Register' : 'Login'}
             </Button>
           </Form>
-          <Button type="link" onClick={() => setMode(mode === 'register' ? 'login' : 'register')} block>
-            {mode === 'register' ? 'Already have an account?' : 'Create a new account'}
+          <Button
+            type="link"
+            onClick={() => setMode(mode === 'register' ? 'login' : 'register')}
+            block
+          >
+            {mode === 'register'
+              ? 'Already have an account?'
+              : 'Create a new account'}
           </Button>
         </Space>
       </Card>
@@ -124,7 +173,11 @@ function AuthPanel(props: { client: ApiClient; onAuth: (auth: AuthResult) => voi
   );
 }
 
-function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: () => void }) {
+function WorkspacePanel(props: {
+  auth: AuthResult;
+  client: ApiClient;
+  onLogout: () => void;
+}) {
   const [view, setView] = useState<ViewKey>('chat');
   const [workspace, setWorkspace] = useState<WorkspaceDTO | null>(null);
   const [files, setFiles] = useState<LibraryFileDTO[]>([]);
@@ -135,10 +188,17 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
   async function refresh() {
     setError('');
     const workspaces = await props.client.get<WorkspaceDTO[]>('/workspaces');
-    const current = workspaces.find((item) => item.workspace_id === props.auth.default_workspace_id) || workspaces[0];
+    const current =
+      workspaces.find(
+        (item) => item.workspace_id === props.auth.default_workspace_id,
+      ) || workspaces[0];
     setWorkspace(current || null);
     if (current) {
-      setFiles(await props.client.get<LibraryFileDTO[]>(`/library/files?workspace_id=${current.workspace_id}`));
+      setFiles(
+        await props.client.get<LibraryFileDTO[]>(
+          `/library/files?workspace_id=${current.workspace_id}`,
+        ),
+      );
     }
   }
 
@@ -157,16 +217,26 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
   }, []);
 
   useEffect(() => {
-    if (!workspace || !files.some((file) => ['pending', 'parsing'].includes(file.parse_status))) return;
+    if (
+      !workspace ||
+      !files.some((file) => ['pending', 'parsing'].includes(file.parse_status))
+    )
+      return;
     const timer = window.setInterval(() => {
       refresh().catch((err) => handleError(err, 'Refresh files failed'));
     }, 2500);
     return () => window.clearInterval(timer);
   }, [workspace?.workspace_id, files]);
 
-  const readyCount = files.filter((file) => file.parse_status === 'ready').length;
-  const parsingCount = files.filter((file) => ['pending', 'parsing'].includes(file.parse_status)).length;
-  const failedCount = files.filter((file) => file.parse_status === 'failed').length;
+  const readyCount = files.filter(
+    (file) => file.parse_status === 'ready',
+  ).length;
+  const parsingCount = files.filter((file) =>
+    ['pending', 'parsing'].includes(file.parse_status),
+  ).length;
+  const failedCount = files.filter(
+    (file) => file.parse_status === 'failed',
+  ).length;
 
   const uploadProps: UploadProps = {
     multiple: true,
@@ -178,7 +248,10 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
       try {
         const formData = new FormData();
         formData.append('file', file);
-        await props.client.upload<LibraryFileDTO>(`/library/files/upload?workspace_id=${workspace.workspace_id}`, formData);
+        await props.client.upload<LibraryFileDTO>(
+          `/library/files/upload?workspace_id=${workspace.workspace_id}`,
+          formData,
+        );
         await refresh();
       } catch (err) {
         handleError(err, 'Upload failed');
@@ -209,13 +282,22 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
         </div>
 
         <nav className="workspace-nav">
-          <button className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>
+          <button
+            className={view === 'chat' ? 'active' : ''}
+            onClick={() => setView('chat')}
+          >
             SmartBar
           </button>
-          <button className={view === 'library' ? 'active' : ''} onClick={() => setView('library')}>
+          <button
+            className={view === 'library' ? 'active' : ''}
+            onClick={() => setView('library')}
+          >
             Library
           </button>
-          <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
+          <button
+            className={view === 'settings' ? 'active' : ''}
+            onClick={() => setView('settings')}
+          >
             Settings
           </button>
         </nav>
@@ -237,7 +319,11 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
         <header className="workspace-toolbar">
           <div>
             <Typography.Title level={3}>
-              {view === 'chat' ? 'Ask your knowledge base' : view === 'library' ? 'Document library' : 'Workspace settings'}
+              {view === 'chat'
+                ? 'Ask your knowledge base'
+                : view === 'library'
+                  ? 'Document library'
+                  : 'Workspace settings'}
             </Typography.Title>
             <Typography.Text type="secondary">
               {view === 'chat'
@@ -266,7 +352,11 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
             {view === 'chat' ? (
               <ChatView files={files} />
             ) : view === 'library' ? (
-              <LibraryView files={files} readyCount={readyCount} failedCount={failedCount} />
+              <LibraryView
+                files={files}
+                readyCount={readyCount}
+                failedCount={failedCount}
+              />
             ) : (
               <SettingsView apiBaseURL={API_BASE_URL} workspace={workspace} />
             )}
@@ -278,7 +368,9 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
 }
 
 function ChatView(props: { files: LibraryFileDTO[] }) {
-  const readyFiles = props.files.filter((file) => file.parse_status === 'ready');
+  const readyFiles = props.files.filter(
+    (file) => file.parse_status === 'ready',
+  );
 
   return (
     <div className="chat-grid">
@@ -287,14 +379,26 @@ function ChatView(props: { files: LibraryFileDTO[] }) {
       </section>
       <aside className="context-panel">
         <Typography.Title level={5}>Knowledge context</Typography.Title>
-        <Typography.Text type="secondary">Ready documents are used as retrieval sources.</Typography.Text>
+        <Typography.Text type="secondary">
+          Ready documents are used as retrieval sources.
+        </Typography.Text>
         <List
           className="compact-list"
           dataSource={readyFiles.slice(0, 8)}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ready files yet" /> }}
+          locale={{
+            emptyText: (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="No ready files yet"
+              />
+            ),
+          }}
           renderItem={(file) => (
             <List.Item>
-              <List.Item.Meta title={file.title} description={`${Math.round(file.size / 1024)} KB`} />
+              <List.Item.Meta
+                title={file.title}
+                description={`${Math.round(file.size / 1024)} KB`}
+              />
               <Badge status="success" />
             </List.Item>
           )}
@@ -304,8 +408,14 @@ function ChatView(props: { files: LibraryFileDTO[] }) {
   );
 }
 
-function LibraryView(props: { files: LibraryFileDTO[]; readyCount: number; failedCount: number }) {
-  const progress = props.files.length ? Math.round((props.readyCount / props.files.length) * 100) : 0;
+function LibraryView(props: {
+  files: LibraryFileDTO[];
+  readyCount: number;
+  failedCount: number;
+}) {
+  const progress = props.files.length
+    ? Math.round((props.readyCount / props.files.length) * 100)
+    : 0;
 
   return (
     <div className="library-grid">
@@ -314,13 +424,19 @@ function LibraryView(props: { files: LibraryFileDTO[]; readyCount: number; faile
         <Progress percent={progress} />
         <Space>
           <Tag color="green">{props.readyCount} ready</Tag>
-          <Tag color={props.failedCount ? 'red' : 'default'}>{props.failedCount} failed</Tag>
+          <Tag color={props.failedCount ? 'red' : 'default'}>
+            {props.failedCount} failed
+          </Tag>
         </Space>
       </Card>
       <Card className="library-list-card">
         <List
           dataSource={props.files}
-          locale={{ emptyText: <Empty description="Upload PDF / DOCX / PPTX / TXT / MD files first." /> }}
+          locale={{
+            emptyText: (
+              <Empty description="Upload PDF / DOCX / PPTX / TXT / MD files first." />
+            ),
+          }}
           renderItem={(file) => (
             <List.Item>
               <List.Item.Meta
@@ -349,13 +465,22 @@ function SettingsView(props: { apiBaseURL: string; workspace: WorkspaceDTO }) {
         <code>{props.workspace.role}</code>
       </div>
       <Divider />
-      <Segmented block options={['DashScope', 'OpenAI-compatible', 'Ollama local']} value="DashScope" />
+      <Segmented
+        block
+        options={['DashScope', 'OpenAI-compatible', 'Ollama local']}
+        value="DashScope"
+      />
     </Card>
   );
 }
 
 function StatusTag(props: { status: string }) {
-  const color = props.status === 'ready' ? 'green' : props.status === 'failed' ? 'red' : 'blue';
+  const color =
+    props.status === 'ready'
+      ? 'green'
+      : props.status === 'failed'
+        ? 'red'
+        : 'blue';
   return <Tag color={color}>{props.status}</Tag>;
 }
 

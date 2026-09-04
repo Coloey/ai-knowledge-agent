@@ -1,6 +1,6 @@
 # AI Knowledge Agent 能力扩展技术方案
 
-> 状态：Draft v0.1，待技术评审
+> 状态：P0 v1.0 已实现，P1-P4 待评审
 >
 > 日期：2026-09-03
 >
@@ -8,7 +8,7 @@
 >
 > 参考项目：`/Users/coloey/notta_brain_web`，快照 `dev/xiaochun/brain-credit-35@71ea24b54`
 >
-> 本文只定义技术方案、演进顺序与验收边界，不包含业务代码实现。
+> 本文定义技术方案、演进顺序与验收边界；P0 的实际落地差异见 1.1。
 
 ## 1. 结论
 
@@ -30,6 +30,20 @@ POST SSE / Session Detail / Replay
 ```
 
 这不是旧式 Virtual DOM Tree。参考当前 Notta Brain 的真实实现，本项目采用更直接的“外层 Part + 内层扁平 Chunk”View Model，以稳定 ID 原位更新节点。
+
+### 1.1 P0 实现结果（2026-09-04）
+
+P0 已按 Protocol → Reducer → Backend Journal → ChatRuntime/SmartBar 顺序完成：
+
+- `@agent/protocol` 是前后端唯一 V2 contract；V1 直接拒绝。
+- `@agent/domain` 提供归一化 Thread/Part/Chunk 和纯 Reducer。
+- `SessionEventJournal` 先持久化再发布 SSE，并通过 Drizzle 迁移现有事件。
+- `@agent/chat-runtime` 统一实时流、Session Detail、停止、错误和多线程状态。
+- `@agent/smart-bar` 只使用 commands/selectors 渲染，不再解析 wire event。
+
+落地时做了两项收敛：`ChatTransport` 同时承载 stream/detail/interrupt，P0 暂不增加只有一个实现的
+`SessionRepository`；`task_completed.content.terminal_reason` 被设为必填，确保 `completed / failed /
+interrupted` 在实时与回放后语义一致。历史页面、游标分页和透明断线 replay 仍属于 P1。
 
 ## 2. 范围和取舍
 
@@ -281,7 +295,7 @@ interface AgentEventEnvelope<TType, TContent> {
   schema_version: 2;
   event_id: string;
   seq: number;
-  timestamp: string;
+  timestamp: number;
   request_id: string;
   workspace_id: string;
   session_id: string;
@@ -298,16 +312,16 @@ interface AgentEventEnvelope<TType, TContent> {
 | Event | 必需字段 | Reducer 行为 |
 | --- | --- | --- |
 | `task_started` | 正式 question/answer/run identity | 将本地 pending question 原子绑定到服务端 ID |
-| `thinking` | `chunk_id`, `text_delta` | 创建或追加 Thinking Chunk |
-| `data` | `chunk_id`, `text_delta` | 创建或追加 Message Chunk |
-| `current_tool_use` | `tool_use_id`, `tool_name`, `input_delta` | upsert Tool Chunk 与增量参数 |
-| `tool_result` | `tool_use_id`, `status`, `public_result` | 原位完成 Tool Chunk |
+| `thinking` | `chunk_id`, `text` | 创建或追加 Thinking Chunk |
+| `data` | `chunk_id`, `text` | 创建或追加 Message Chunk |
+| `current_tool_use` | `tool_use_id`, `name`, `input?` | upsert Tool Chunk |
+| `tool_result` | `tool_use_id`, `result?`, `is_error?` | 原位完成 Tool Chunk |
 | `citation` | `message_chunk_id`, citation metadata | 合并到目标 Message references |
-| `artifact` | artifact identity/status | upsert Artifact metadata；二进制不进入 SSE |
-| `result` | `final_message_chunk_id`, artifact ids | 完成所有活跃 Chunk 和 Answer Part |
-| `error` | `code`, `category`, `retryable`, safe message | 将活跃状态收敛到 error |
-| `task_completed` | terminal reason | 关闭 run；缺 result 时执行受控兜底 |
-| `heartbeat` | server timestamp | 仅更新连接活性，不进入 UI |
+| `artifact` | `artifact?` 或 `artifacts?`（至少一个） | upsert Artifact metadata；二进制不进入 SSE |
+| `result` | `final_message_chunk_id`, `text`, `artifacts?` | 完成所有活跃 Chunk 和 Answer Part |
+| `error` | `message`, `error_code?` | 用安全文案将活跃状态收敛到 error |
+| `task_completed` | `terminal_reason`, `message?` | 按 completed/failed/interrupted 关闭 run |
+| `heartbeat` | `at?` | 仅更新连接活性，不进入 UI |
 
 ### 7.2 直接切换策略
 
@@ -324,18 +338,19 @@ interface AgentEventEnvelope<TType, TContent> {
 
 ### 7.3 SSE Transport 可靠性
 
-`FetchSseAdapter` 必须支持：
+P0 已实现的 `FetchSseTransport` 支持：
 
 - `\n\n` 与 `\r\n\r\n`；
 - 多行 `data:` 合并；
 - `id/event/retry/comment` 字段；
 - UTF-8 跨 chunk 解码；
-- malformed JSON 隔离，不让 UI 崩溃；
+- malformed V2 event 转为对应 Thread 的 transport error，不让异常穿透展示组件；
 - `Content-Type` 校验和非 SSE 错误 envelope；
 - Abort 后丢弃迟到数据；
-- last event id、重复 event 和 seq 缺口观测。
+- 重复 event 幂等忽略和 seq 缺口诊断。
 
-第一阶段不自动续接正在执行的 run；先通过 Session Detail + Replay 恢复，避免重复生成。待协议支持明确的 cursor/lease 后，再增加透明重连。
+P0 不自动续接正在执行的 run；通过 Session Detail 恢复已持久化状态，重复 `request_id` 由后端读取 Event
+Journal 重放。待协议支持明确的 cursor/lease 后，再在 P1 增加透明断线续播。
 
 ## 8. 前端方案
 
@@ -345,29 +360,27 @@ interface AgentEventEnvelope<TType, TContent> {
 
 ```ts
 interface ChatRuntimeCommands {
-  createThread(input?: CreateThreadInput): string;
-  openThread(threadId: string): Promise<void>;
-  send(input: SendMessageInput): Promise<void>;
-  stop(threadId: string): void;
-  retry(input: RetryInput): Promise<void>;
-  loadPrevious(threadId: string): Promise<void>;
-  rate(answerId: string, rating: 'up' | 'down'): Promise<void>;
+  openThread(threadId: string): void;
+  send(message: string, threadId?: string): Promise<void>;
+  stop(threadId?: string): void;
+  loadThreadDetail(sessionId: string): Promise<void>;
 }
 ```
 
-React 侧只提供 selector hooks，例如 `useThread(id)`、`usePart(id)`、`useChunk(id)` 和 `useChatCommands()`。不把 Zustand store 本体作为公共 Interface 暴露。
+React 侧提供 `ChatRuntimeProvider`、`useChatCommands()`、`useCurrentThread()`、`useOrderedParts(threadId)` 和
+`useOrderedChunks(partId)`。P1 的 create/retry/pagination/rate 用例出现时再扩展 Commands；不暴露内部 Store。
 
 ### 8.2 Runtime 内部职责
 
 | 内部组件 | 职责 |
 | --- | --- |
-| `ChatController` | 编排 send/open/stop/retry/loadPrevious 用例 |
-| `StreamRegistry` | 按 threadId 保存连接，阻止同 Thread 重复 run |
+| `ChatRuntime` | 编排 send/open/stop/loadThreadDetail 用例 |
+| `generations` | 按 threadId 保存连接与 AbortController，阻止同 Thread 重复 run |
 | `EventReducer` | 唯一的 event → state 映射入口 |
-| `HistoryMaterializer` | 按 seq 将持久化 events 输入同一个 Reducer |
-| `RuntimeStore` | 归一化 Thread/Part/Chunk/Artifact 状态 |
-| `ErrorMapper` | transport/business/auth/quota/client 错误转安全 UI 错误 |
-| `IdBinder` | 本地 question ID 到服务端 question ID 的原子替换 |
+| `decodeSessionDetail` | 校验 identity/status/seq 后将持久化 events 输入同一个 Reducer |
+| `ChatState` | 归一化 Thread/Part/Chunk/Artifact 状态 |
+| `recordTransportError` | transport/client 异常转当前 Thread 的安全错误状态 |
+| `startRun` | 本地 question ID 到服务端 question ID 的原子替换 |
 
 ### 8.3 停止语义
 
@@ -623,7 +636,7 @@ interface SendMessageOptions {
 
 | 阶段 | 能力 | 主要交付物 | 退出标准 |
 | --- | --- | --- | --- |
-| P0 运行时地基 | Versioned protocol、ChatRuntime、多 Thread、Part/Chunk、稳定 stop/error | protocol、domain reducer、runtime、SmartBar 解耦、event journal | 实时/历史夹具等价；stop 100 ms 内收尾；后台 Thread 不污染当前 Thread |
+| P0 运行时地基（已完成） | Versioned protocol、ChatRuntime、多 Thread、Part/Chunk、稳定 stop/error | protocol、domain reducer、runtime、SmartBar 解耦、event journal | 已通过实时/历史等价、立即 stop、线程隔离及全仓验证 |
 | P1 会话与知识体验 | History、Detail 分页、Replay、知识源多选、引用抽屉、Library 搜索/重命名 | History page、source picker、citation UI、replay API | 刷新恢复一致；引用能定位文件/页；断流后不重复生成 |
 | P2 Agent 工具 | Tool Registry、Agent Loop、Library tools、通用 Tool Card、Prompt Tools | orchestrator、3 个内建工具、prompt catalog | 工具 use/result 可追踪；超时/取消/失败可恢复；未知工具不阻断答案 |
 | P3 Artifact | 文档/PPT/图片任务、进度、预览、下载、Artifact Center | artifact tables、worker jobs、renderer | 大文件不进 SSE；权限正确；失败可重试；历史可恢复 |

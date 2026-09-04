@@ -198,7 +198,12 @@ export class ChatRuntime {
   ): Promise<void> {
     const text = message.trim();
     if (!text) return;
-    if (this.generations.has(threadId))
+    const existingThread = this.state.threads[threadId];
+    if (
+      this.generations.has(threadId) ||
+      (existingThread &&
+        ['streaming', 'result'].includes(existingThread.lifecycle))
+    )
       throw new Error(`Thread ${threadId} is already streaming`);
 
     let next = openChatThreadWithoutSelection(this.state, threadId);

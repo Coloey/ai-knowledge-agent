@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http';
 
 import { decodeAgentEvent, type AgentEvent } from '@agent/protocol';
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import { type SessionRunIdentity } from '../src/sessions/session-event-journal.service';
@@ -93,6 +94,7 @@ describe('SessionsService V2 stream', () => {
   });
 
   it('emits error and task_completed as separate events and marks a failed run terminal', async () => {
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const { journal, persisted, fail } = journalFake([]);
     const { response } = responseWriter([]);
     const service = serviceWith({
@@ -111,12 +113,41 @@ describe('SessionsService V2 stream', () => {
     expect(persisted.slice(-2).map((event) => event.type)).toEqual(['error', 'task_completed']);
     expect(fail).toHaveBeenCalledWith(identity(), {
       error_code: 43106,
-      message: 'provider failed',
+      message: 'Generation failed. Please try again.',
     });
+    expect(log).toHaveBeenCalledWith(
+      'Agent generation failed for run run_1',
+      expect.stringContaining('provider failed'),
+    );
     expect(persisted.at(-1)).toMatchObject({
       type: 'task_completed',
       content: { terminal_reason: 'failed' },
     });
+  });
+
+  it('recovers a transient task_started append failure before terminalizing the run', async () => {
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { journal, persisted, append, fail } = journalFake([]);
+    append.mockRejectedValueOnce(new Error('temporary journal failure'));
+    const { response } = responseWriter([]);
+    const service = serviceWith({
+      journal,
+      retrieval: { retrieve: vi.fn() },
+      llm: { streamAnswer: vi.fn() },
+      control: { clear: vi.fn(), isInterrupted: vi.fn().mockResolvedValue(false) },
+    });
+
+    await service.stream({ identity: identity(), question: 'question' }, response, new AbortController());
+
+    expect(persisted.map((event) => event.type)).toEqual(['task_started', 'error', 'task_completed']);
+    expect(fail).toHaveBeenCalledWith(identity(), {
+      error_code: 43106,
+      message: 'Generation failed. Please try again.',
+    });
+    expect(log).toHaveBeenCalledWith(
+      'Agent generation failed for run run_1',
+      expect.stringContaining('temporary journal failure'),
+    );
   });
 });
 
@@ -164,6 +195,7 @@ function journalFake(trace: string[]) {
     return event;
   };
   const append = vi.fn(async (identityValue, type, content) => persist(identityValue, type, content));
+  const read = vi.fn(async () => persisted);
   const succeed = vi.fn(async (identityValue, content) => ({
     signal: { event: persist(identityValue, 'result', content), appended: true },
     completion: {
@@ -185,7 +217,7 @@ function journalFake(trace: string[]) {
     }),
     appended: true,
   }));
-  return { journal: { append, succeed, fail, complete }, persisted, complete, fail };
+  return { journal: { append, read, succeed, fail, complete }, persisted, append, complete, fail };
 }
 
 function identity(): SessionRunIdentity {

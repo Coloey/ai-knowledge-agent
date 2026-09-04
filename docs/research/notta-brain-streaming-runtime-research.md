@@ -1,8 +1,10 @@
 # Notta Brain 当前功能与 AI 流式交互运行时调研
 
-> 调研对象：`/Users/coloey/notta_brain_web`  
-> 调研快照：分支 `dev/xiaochun/brain-credit-35`，提交 `71ea24b54`  
-> 调研日期：2026-09-03  
+> 调研对象：`/Users/coloey/notta_brain_web`
+>
+> 调研快照：分支 `dev/xiaochun/brain-credit-35`，提交 `71ea24b54`
+>
+> 调研日期：2026-09-03
 > 方法：只读源码追踪；未修改 `notta_brain_web`，未连接后端、未启动浏览器、未做线上可用性验证。
 
 ## 1. 结论先行

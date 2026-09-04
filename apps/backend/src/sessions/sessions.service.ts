@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http';
 
 import type { AgentEvent } from '@agent/protocol';
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, desc, eq } from 'drizzle-orm';
 
@@ -37,6 +37,8 @@ export interface StreamContext {
 
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
     @Inject(SessionEventJournal) private readonly journal: SessionEventJournal,
@@ -159,6 +161,7 @@ export class SessionsService {
     let fullText = '';
     let pendingText = '';
     let completed = false;
+    let started = false;
 
     const emit = async <TType extends EventType>(
       type: TType,
@@ -186,6 +189,7 @@ export class SessionsService {
     try {
       await this.control.clear(context.identity.sessionId);
       await emit('task_started', { message: context.question });
+      started = true;
       await emit('meta_info', { route: 'rag' });
       await emit('thinking', {
         chunk_id: `thinking_${context.identity.answerId}_retrieval`,
@@ -246,13 +250,24 @@ export class SessionsService {
       this.write(response, sseDone());
     } catch (error) {
       if (!completed) {
+        if (!started) {
+          const durable = await this.journal.read(context.identity.answerId);
+          const durableStart = durable.find((event): event is EventOf<'task_started'> => event.type === 'task_started');
+          if (durableStart) this.write(response, sseData(durableStart));
+          else await emit('task_started', { message: context.question });
+          started = true;
+        }
         await flushText();
         if (abort.signal.aborted) {
           await complete({ status: 'interrupted', terminalReason: 'interrupted', message: 'interrupted' });
         } else {
+          this.logger.error(
+            `Agent generation failed for run ${context.identity.runId}`,
+            error instanceof Error ? error.stack : String(error),
+          );
           const terminal = await this.journal.fail(context.identity, {
             error_code: 43106,
-            message: error instanceof Error ? error.message : 'Generation failed',
+            message: 'Generation failed. Please try again.',
           });
           completed = true;
           if (terminal.signal.appended) this.write(response, sseData(terminal.signal.event));

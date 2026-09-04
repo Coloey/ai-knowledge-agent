@@ -1,8 +1,10 @@
 # Notta Brain AI 流式交互与会话回放统一运行时 PRD
 
-> 状态：Draft v0.1（逆向现有前端源码形成，待产品、前端、服务端联合评审）  
-> 调研代码库：`/Users/coloey/notta_brain_web`  
-> 调研分支：`dev/xiaochun/brain-credit-35`  
+> 状态：Draft v0.1（逆向现有前端源码形成，待产品、前端、服务端联合评审）
+>
+> 调研代码库：`/Users/coloey/notta_brain_web`
+>
+> 调研分支：`dev/xiaochun/brain-credit-35`
 > 调研日期：2026-09-03
 
 ## 1. 文档目的

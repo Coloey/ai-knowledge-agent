@@ -1,5 +1,6 @@
 export type JsonPrimitive = boolean | number | string | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface TaskStartedContent {
   message: string;
@@ -150,7 +151,10 @@ export function decodeAgentEvent(raw: string): AgentEvent {
     type,
   };
 
-  return { ...envelope, content: decodeContent(type, event.content) } as AgentEvent;
+  return {
+    ...envelope,
+    content: decodeContent(type, event.content),
+  } as AgentEvent;
 }
 
 export interface SseFrame {
@@ -165,7 +169,9 @@ export interface SseDecoder {
   finish(): void;
 }
 
-export function createSseDecoder(onFrame: (frame: SseFrame) => void): SseDecoder {
+export function createSseDecoder(
+  onFrame: (frame: SseFrame) => void,
+): SseDecoder {
   const textDecoder = new TextDecoder();
   let buffer = '';
 
@@ -181,19 +187,26 @@ export function createSseDecoder(onFrame: (frame: SseFrame) => void): SseDecoder
       if (!line || line.startsWith(':')) continue;
       const colonIndex = line.indexOf(':');
       const field = colonIndex === -1 ? line : line.slice(0, colonIndex);
-      const value = colonIndex === -1 ? '' : line.slice(colonIndex + 1).replace(/^ /, '');
+      const value =
+        colonIndex === -1 ? '' : line.slice(colonIndex + 1).replace(/^ /, '');
 
       if (field === 'data') data.push(value);
       if (field === 'id') id = value;
       if (field === 'event') event = value;
       if (field === 'retry' && /^\d+$/.test(value)) {
         const parsedRetry = Number(value);
-        if (Number.isSafeInteger(parsedRetry) && parsedRetry >= 0) retry = parsedRetry;
+        if (Number.isSafeInteger(parsedRetry) && parsedRetry >= 0)
+          retry = parsedRetry;
       }
     }
 
     if (!data.length) return;
-    onFrame({ ...(id === undefined ? {} : { id }), ...(event === undefined ? {} : { event }), ...(retry === undefined ? {} : { retry }), data: data.join('\n') });
+    onFrame({
+      ...(id === undefined ? {} : { id }),
+      ...(event === undefined ? {} : { event }),
+      ...(retry === undefined ? {} : { retry }),
+      data: data.join('\n'),
+    });
   };
 
   const processBufferedFrames = (final = false) => {
@@ -221,12 +234,17 @@ export function createSseDecoder(onFrame: (frame: SseFrame) => void): SseDecoder
   };
 }
 
-function decodeContent(type: AgentEvent['type'], value: unknown): AgentEvent['content'] {
+function decodeContent(
+  type: AgentEvent['type'],
+  value: unknown,
+): AgentEvent['content'] {
   const content = requireRecord(value, `${type}.content`);
 
   switch (type) {
     case 'task_started':
-      return { message: requireString(content.message, 'task_started.content.message') };
+      return {
+        message: requireString(content.message, 'task_started.content.message'),
+      };
     case 'meta_info':
       requireOptionalString(content.route, 'meta_info.content.route');
       return content as MetaInfoContent;
@@ -238,44 +256,74 @@ function decodeContent(type: AgentEvent['type'], value: unknown): AgentEvent['co
       };
     case 'current_tool_use':
       return {
-        tool_use_id: requireIdentity(content.tool_use_id, 'current_tool_use.content.tool_use_id'),
+        tool_use_id: requireIdentity(
+          content.tool_use_id,
+          'current_tool_use.content.tool_use_id',
+        ),
         name: requireIdentity(content.name, 'current_tool_use.content.name'),
-        ...(content.input === undefined ? {} : { input: content.input as JsonValue }),
+        ...(content.input === undefined
+          ? {}
+          : { input: content.input as JsonValue }),
       };
     case 'tool_result':
-      const isError = requireOptionalBoolean(content.is_error, 'tool_result.content.is_error');
+      const isError = requireOptionalBoolean(
+        content.is_error,
+        'tool_result.content.is_error',
+      );
       return {
-        tool_use_id: requireIdentity(content.tool_use_id, 'tool_result.content.tool_use_id'),
-        ...(content.result === undefined ? {} : { result: content.result as JsonValue }),
+        tool_use_id: requireIdentity(
+          content.tool_use_id,
+          'tool_result.content.tool_use_id',
+        ),
+        ...(content.result === undefined
+          ? {}
+          : { result: content.result as JsonValue }),
         ...(isError === undefined ? {} : { is_error: isError }),
       };
     case 'citation':
       return {
-        message_chunk_id: requireIdentity(content.message_chunk_id, 'citation.content.message_chunk_id'),
+        message_chunk_id: requireIdentity(
+          content.message_chunk_id,
+          'citation.content.message_chunk_id',
+        ),
         citations: requireCitationArray(content.citations),
       };
     case 'artifact':
       return requireArtifactContent(content);
     case 'result':
       return {
-        final_message_chunk_id: requireIdentity(content.final_message_chunk_id, 'result.content.final_message_chunk_id'),
+        final_message_chunk_id: requireIdentity(
+          content.final_message_chunk_id,
+          'result.content.final_message_chunk_id',
+        ),
         text: requireString(content.text, 'result.content.text'),
-        ...(content.artifacts === undefined ? {} : { artifacts: requireArtifactArray(content.artifacts) }),
+        ...(content.artifacts === undefined
+          ? {}
+          : { artifacts: requireArtifactArray(content.artifacts) }),
       };
     case 'error':
       return {
         message: requireString(content.message, 'error.content.message'),
-        ...(content.error_code === undefined ? {} : { error_code: requireErrorCode(content.error_code) }),
+        ...(content.error_code === undefined
+          ? {}
+          : { error_code: requireErrorCode(content.error_code) }),
       };
     case 'task_completed':
       requireOptionalString(content.message, 'task_completed.content.message');
       return {
         terminal_reason: requireTerminalReason(content.terminal_reason),
-        ...(content.message === undefined ? {} : { message: content.message as string }),
+        ...(content.message === undefined
+          ? {}
+          : { message: content.message as string }),
       };
     case 'heartbeat':
-      if (content.at !== undefined && (typeof content.at !== 'number' || !Number.isFinite(content.at))) {
-        throw new AgentEventDecodeError('heartbeat.content.at must be a finite number');
+      if (
+        content.at !== undefined &&
+        (typeof content.at !== 'number' || !Number.isFinite(content.at))
+      ) {
+        throw new AgentEventDecodeError(
+          'heartbeat.content.at must be a finite number',
+        );
       }
       return content as HeartbeatContent;
   }
@@ -289,7 +337,10 @@ function requireRecord(value: unknown, name: string): Record<string, unknown> {
 }
 
 function requireEventType(value: unknown): AgentEvent['type'] {
-  if (typeof value !== 'string' || !eventTypes.has(value as AgentEvent['type'])) {
+  if (
+    typeof value !== 'string' ||
+    !eventTypes.has(value as AgentEvent['type'])
+  ) {
     throw new AgentEventDecodeError('Unknown agent event type');
   }
   return value as AgentEvent['type'];
@@ -327,7 +378,10 @@ function requireOptionalString(value: unknown, name: string): void {
   if (value !== undefined) requireString(value, name);
 }
 
-function requireOptionalBoolean(value: unknown, name: string): boolean | undefined {
+function requireOptionalBoolean(
+  value: unknown,
+  name: string,
+): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'boolean') {
     throw new AgentEventDecodeError(`${name} must be a boolean`);
@@ -346,28 +400,60 @@ function requireTerminalReason(value: unknown): TerminalReason {
 
 function requireCitationArray(value: unknown): Citation[] {
   if (!Array.isArray(value)) {
-    throw new AgentEventDecodeError('citation.content.citations must be an array');
+    throw new AgentEventDecodeError(
+      'citation.content.citations must be an array',
+    );
   }
   return value.map((citation, index) => {
-    const record = requireRecord(citation, `citation.content.citations[${index}]`);
+    const record = requireRecord(
+      citation,
+      `citation.content.citations[${index}]`,
+    );
     requireOptionalString(record.id, `citation.content.citations[${index}].id`);
-    requireOptionalString(record.file_id, `citation.content.citations[${index}].file_id`);
-    requireOptionalString(record.title, `citation.content.citations[${index}].title`);
-    requireOptionalString(record.snippet, `citation.content.citations[${index}].snippet`);
-    if (record.page !== undefined && (typeof record.page !== 'number' || !Number.isFinite(record.page))) {
-      throw new AgentEventDecodeError(`citation.content.citations[${index}].page must be a finite number`);
+    requireOptionalString(
+      record.file_id,
+      `citation.content.citations[${index}].file_id`,
+    );
+    requireOptionalString(
+      record.title,
+      `citation.content.citations[${index}].title`,
+    );
+    requireOptionalString(
+      record.snippet,
+      `citation.content.citations[${index}].snippet`,
+    );
+    if (
+      record.page !== undefined &&
+      (typeof record.page !== 'number' || !Number.isFinite(record.page))
+    ) {
+      throw new AgentEventDecodeError(
+        `citation.content.citations[${index}].page must be a finite number`,
+      );
     }
     return record as Citation;
   });
 }
 
-function requireArtifactContent(content: Record<string, unknown>): ArtifactContent {
+function requireArtifactContent(
+  content: Record<string, unknown>,
+): ArtifactContent {
   if (content.artifact === undefined && content.artifacts === undefined) {
-    throw new AgentEventDecodeError('artifact.content must include artifact or artifacts');
+    throw new AgentEventDecodeError(
+      'artifact.content must include artifact or artifacts',
+    );
   }
   return {
-    ...(content.artifact === undefined ? {} : { artifact: requireArtifact(content.artifact, 'artifact.content.artifact') }),
-    ...(content.artifacts === undefined ? {} : { artifacts: requireArtifactArray(content.artifacts) }),
+    ...(content.artifact === undefined
+      ? {}
+      : {
+          artifact: requireArtifact(
+            content.artifact,
+            'artifact.content.artifact',
+          ),
+        }),
+    ...(content.artifacts === undefined
+      ? {}
+      : { artifacts: requireArtifactArray(content.artifacts) }),
   };
 }
 
@@ -375,7 +461,9 @@ function requireArtifactArray(value: unknown): Artifact[] {
   if (!Array.isArray(value)) {
     throw new AgentEventDecodeError('artifacts must be an array');
   }
-  return value.map((artifact, index) => requireArtifact(artifact, `artifacts[${index}]`));
+  return value.map((artifact, index) =>
+    requireArtifact(artifact, `artifacts[${index}]`),
+  );
 }
 
 function requireArtifact(value: unknown, name: string): Artifact {
@@ -387,7 +475,9 @@ function requireArtifact(value: unknown, name: string): Artifact {
 
 function requireErrorCode(value: unknown): number | string {
   if (typeof value !== 'number' && typeof value !== 'string') {
-    throw new AgentEventDecodeError('error.content.error_code must be a number or string');
+    throw new AgentEventDecodeError(
+      'error.content.error_code must be a number or string',
+    );
   }
   return value;
 }

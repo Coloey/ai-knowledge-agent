@@ -647,6 +647,27 @@ describe('ChatRuntime', () => {
     ).rejects.toThrow('Unsupported agent event schema version');
   });
 
+  it('does not start a second run for a thread restored as streaming', async () => {
+    const transport = new ControlledTransport();
+    const events = completeEvents(
+      sendInput(),
+      'session-streaming',
+      'run-streaming',
+      'partial answer',
+    ).slice(0, -2);
+    transport.detail = detailFromEvents(events, 'streaming');
+    const runtime = createRuntime(transport, 'session-streaming');
+    await runtime.loadThreadDetail('session-streaming');
+
+    expect(runtime.getState().threads['session-streaming'].lifecycle).toBe(
+      'streaming',
+    );
+    await expect(
+      runtime.send('second run', 'session-streaming'),
+    ).rejects.toThrow('already streaming');
+    expect(transport.streams).toHaveLength(0);
+  });
+
   it('reloads an existing local thread by its formal session id without creating a duplicate thread', async () => {
     const transport = new ControlledTransport();
     const runtime = createRuntime(transport);
