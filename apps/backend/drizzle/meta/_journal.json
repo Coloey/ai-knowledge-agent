@@ -15,6 +15,13 @@
       "when": 1785424025625,
       "tag": "0001_analytics_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788434613379,
+      "tag": "0002_overconfident_betty_ross",
+      "breakpoints": true
     }
   ]
 }

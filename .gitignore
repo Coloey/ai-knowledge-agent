@@ -17,6 +17,8 @@ build/
 .coverage
 htmlcov/
 storage
+!apps/backend/src/storage/
+!apps/backend/src/storage/**
 backend/storage
 infra/certbot
 .DS_Store

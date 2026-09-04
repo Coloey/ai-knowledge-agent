@@ -6,13 +6,19 @@
     "node": ">=22"
   },
   "scripts": {
+    "predev": "pnpm --filter @agent/protocol build",
     "dev": "tsx watch src/main.ts",
+    "predev:worker": "pnpm --filter @agent/protocol build",
     "dev:worker": "tsx watch src/worker.ts",
+    "prebuild": "pnpm --filter @agent/protocol build",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "start:worker": "node dist/worker.js",
+    "pretypecheck": "pnpm --filter @agent/protocol build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @agent/protocol build",
     "test": "vitest run",
+    "pretest:watch": "pnpm --filter @agent/protocol build",
     "test:watch": "vitest",
     "format": "prettier --write \"{src,test}/**/*.ts\" \"*.{json,ts}\"",
     "format:check": "prettier --check \"{src,test}/**/*.ts\" \"*.{json,ts}\"",
@@ -20,6 +26,7 @@
     "db:migrate": "tsx src/database/migrate.ts"
   },
   "dependencies": {
+    "@agent/protocol": "workspace:*",
     "@fastify/helmet": "^13.0.2",
     "@fastify/multipart": "^9.2.1",
     "@aws-sdk/client-s3": "^3.883.0",

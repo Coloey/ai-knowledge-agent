@@ -15,7 +15,10 @@
     "isolatedModules": false,
     "strictPropertyInitialization": false,
     "noEmit": false,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@agent/protocol": ["packages/protocol/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "drizzle.config.ts"],
   "exclude": ["dist", "node_modules"]
