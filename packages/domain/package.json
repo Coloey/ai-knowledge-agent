@@ -9,8 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent/protocol": "workspace:*",
-    "zustand": "^5.0.8"
+    "@agent/protocol": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

@@ -86,7 +86,10 @@ describe('SessionsService V2 stream', () => {
       terminalReason: 'interrupted',
       message: 'interrupted',
     });
-    expect(persisted.at(-1)?.type).toBe('task_completed');
+    expect(persisted.at(-1)).toMatchObject({
+      type: 'task_completed',
+      content: { terminal_reason: 'interrupted' },
+    });
   });
 
   it('emits error and task_completed as separate events and marks a failed run terminal', async () => {
@@ -109,6 +112,10 @@ describe('SessionsService V2 stream', () => {
     expect(fail).toHaveBeenCalledWith(identity(), {
       error_code: 43106,
       message: 'provider failed',
+    });
+    expect(persisted.at(-1)).toMatchObject({
+      type: 'task_completed',
+      content: { terminal_reason: 'failed' },
     });
   });
 });
@@ -160,19 +167,22 @@ function journalFake(trace: string[]) {
   const succeed = vi.fn(async (identityValue, content) => ({
     signal: { event: persist(identityValue, 'result', content), appended: true },
     completion: {
-      event: persist(identityValue, 'task_completed', { message: 'done' }),
+      event: persist(identityValue, 'task_completed', { terminal_reason: 'completed', message: 'done' }),
       appended: true,
     },
   }));
   const fail = vi.fn(async (identityValue, content) => ({
     signal: { event: persist(identityValue, 'error', content), appended: true },
     completion: {
-      event: persist(identityValue, 'task_completed', { message: 'failed' }),
+      event: persist(identityValue, 'task_completed', { terminal_reason: 'failed', message: 'failed' }),
       appended: true,
     },
   }));
   const complete = vi.fn(async (identityValue, terminal) => ({
-    event: persist(identityValue, 'task_completed', { message: terminal.message }),
+    event: persist(identityValue, 'task_completed', {
+      terminal_reason: terminal.terminalReason,
+      message: terminal.message,
+    }),
     appended: true,
   }));
   return { journal: { append, succeed, fail, complete }, persisted, complete, fail };

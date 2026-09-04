@@ -19,6 +19,7 @@ import {
 import type { UploadProps } from 'antd';
 
 import { ApiClient, ApiProvider, AuthExpiredError, AuthResult, LibraryFileDTO, WorkspaceDTO } from '@agent/api';
+import { ChatRuntimeProvider } from '@agent/chat-runtime';
 import { SmartBar } from '@agent/smart-bar';
 import { AppShell } from '@agent/ui';
 
@@ -260,27 +261,29 @@ function WorkspacePanel(props: { auth: AuthResult; client: ApiClient; onLogout: 
 
         {error ? <Alert type="error" message={error} showIcon /> : null}
 
-        <div className="workspace-content">
-          {view === 'chat' ? (
-            <ChatView workspaceId={workspace.workspace_id} files={files} />
-          ) : view === 'library' ? (
-            <LibraryView files={files} readyCount={readyCount} failedCount={failedCount} />
-          ) : (
-            <SettingsView apiBaseURL={API_BASE_URL} workspace={workspace} />
-          )}
-        </div>
+        <ChatRuntimeProvider workspaceId={workspace.workspace_id}>
+          <div className="workspace-content">
+            {view === 'chat' ? (
+              <ChatView files={files} />
+            ) : view === 'library' ? (
+              <LibraryView files={files} readyCount={readyCount} failedCount={failedCount} />
+            ) : (
+              <SettingsView apiBaseURL={API_BASE_URL} workspace={workspace} />
+            )}
+          </div>
+        </ChatRuntimeProvider>
       </section>
     </div>
   );
 }
 
-function ChatView(props: { workspaceId: string; files: LibraryFileDTO[] }) {
+function ChatView(props: { files: LibraryFileDTO[] }) {
   const readyFiles = props.files.filter((file) => file.parse_status === 'ready');
 
   return (
     <div className="chat-grid">
       <section className="chat-panel">
-        <SmartBar workspaceId={props.workspaceId} />
+        <SmartBar />
       </section>
       <aside className="context-panel">
         <Typography.Title level={5}>Knowledge context</Typography.Title>

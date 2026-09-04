@@ -159,7 +159,7 @@ export class SessionEventJournal {
         eventId,
         updated[0].seq,
         'task_completed',
-        { message: terminal.message },
+        { terminal_reason: terminal.terminalReason, message: terminal.message },
         completedAt,
       );
       await tx.insert(chatAnswerEvents).values({
@@ -285,7 +285,7 @@ export class SessionEventJournal {
           newId('event'),
           nextSeq,
           'task_completed',
-          { message: terminal.message },
+          { terminal_reason: terminal.terminalReason, message: terminal.message },
           new Date(),
         );
         await tx.insert(chatAnswerEvents).values({

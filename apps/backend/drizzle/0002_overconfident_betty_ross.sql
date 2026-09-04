@@ -266,6 +266,12 @@ SET
 			))
 		WHEN "event"."type" = 'task_completed' THEN
 			jsonb_build_object(
+				'terminal_reason', CASE
+					WHEN "answer"."status" = 'finished' THEN 'completed'
+					WHEN "answer"."status" = 'failed' THEN 'failed'
+					WHEN "answer"."status" = 'interrupted' THEN 'interrupted'
+					ELSE COALESCE("event"."content_json" ->> 'terminal_reason', 'completed')
+				END,
 				'message', CASE
 					WHEN "answer"."status" = 'finished' THEN 'done'
 					WHEN "answer"."status" = 'failed' THEN 'failed'
@@ -366,6 +372,11 @@ SELECT
 	2,
 	'task_completed',
 	jsonb_build_object(
+		'terminal_reason', CASE
+			WHEN "answer"."status" = 'finished' THEN 'completed'
+			WHEN "answer"."status" = 'failed' THEN 'failed'
+			ELSE 'interrupted'
+		END,
 		'message', CASE
 			WHEN "answer"."status" = 'finished' THEN 'done'
 			WHEN "answer"."status" = 'failed' THEN 'failed'

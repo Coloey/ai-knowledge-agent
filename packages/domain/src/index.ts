@@ -1,5 +1,3 @@
-import { create } from 'zustand';
-
 import type { AgentEvent, Artifact, Citation, JsonValue } from '@agent/protocol';
 
 export type ChunkStatus = 'streaming' | 'completed' | 'stopped' | 'error';
@@ -48,6 +46,7 @@ export interface ChatState {
 export interface LocalUserMessageOptions {
   requestId: string;
   localPartId?: string;
+  threadId?: string;
 }
 
 export function createChatThread(id: string): Thread {
@@ -73,7 +72,7 @@ export function appendLocalUserMessage(
   options: LocalUserMessageOptions | string,
 ): ChatState {
   const normalized = typeof options === 'string' ? { requestId: options } : options;
-  const thread = requireThread(state, state.currentThreadId);
+  const thread = requireThread(state, normalized.threadId || state.currentThreadId);
   const id = normalized.localPartId || `local:${thread.id}:${thread.partIds.length}`;
   return {
     ...state,
@@ -84,12 +83,21 @@ export function appendLocalUserMessage(
         ...thread,
         runId: undefined,
         answerPartId: undefined,
-        lifecycle: 'idle',
+        lifecycle: 'streaming',
         partIds: [...thread.partIds, id],
         pendingUserPartIdsByRequestId: { ...thread.pendingUserPartIdsByRequestId, [normalized.requestId]: id },
       },
     },
   };
+}
+
+export function openChatThread(state: ChatState, threadId: string): ChatState {
+  const threads = state.threads[threadId]
+    ? state.threads
+    : { ...state.threads, [threadId]: createChatThread(threadId) };
+  return state.currentThreadId === threadId && threads === state.threads
+    ? state
+    : { ...state, currentThreadId: threadId, threads };
 }
 
 export function reduceAgentEvent(state: ChatState, event: AgentEvent): ChatState {
@@ -107,7 +115,7 @@ export function reduceAgentEvent(state: ChatState, event: AgentEvent): ChatState
         next = { ...next, threads: { ...next.threads, [thread.id]: thread } };
       }
     }
-    if (thread.lifecycle === 'streaming') {
+    if (thread.lifecycle === 'streaming' && thread.runId) {
       return addDiagnostic(next, event, 'stale_transition', `Session ${event.session_id} already has a streaming run`, thread.id);
     }
     if (thread.runId === event.run_id && thread.lifecycle !== 'idle') {
@@ -121,7 +129,7 @@ export function reduceAgentEvent(state: ChatState, event: AgentEvent): ChatState
   if (thread.runId !== event.run_id) return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
   if (event.type === 'task_completed') {
     return ['streaming', 'result', 'stopped', 'error'].includes(thread.lifecycle)
-      ? completeRun(next, thread)
+      ? completeRun(next, thread, event.content.terminal_reason)
       : addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
   }
   if (thread.lifecycle !== 'streaming') return addDiagnostic(next, event, 'stale_transition', `Run ${event.run_id} is not streaming`, thread.id);
@@ -155,13 +163,15 @@ export function selectOrderedChunks(state: ChatState, partId: string): Chunk[] {
 
 export function stopRunLocally(state: ChatState, threadId = state.currentThreadId): ChatState {
   const thread = state.threads[threadId];
-  return !thread || thread.lifecycle !== 'streaming' ? state : updateActiveAnswer(state, thread, 'stopped');
+  return !thread || !['streaming', 'result'].includes(thread.lifecycle)
+    ? state
+    : updateActiveAnswer(state, thread, 'stopped');
 }
 
 export function recordTransportError(state: ChatState, message: string, threadId = state.currentThreadId): ChatState {
   const thread = state.threads[threadId];
   if (!thread) return state;
-  if (thread.lifecycle !== 'streaming' && !(thread.lifecycle === 'idle' && Object.keys(thread.pendingUserPartIdsByRequestId).length)) {
+  if (!['streaming', 'result'].includes(thread.lifecycle)) {
     return state;
   }
   const withAnswer = thread.answerPartId ? state : ensureAnswer(state, thread, `transport:${thread.id}:${thread.partIds.length}`);
@@ -305,7 +315,9 @@ function finalizeResult(state: ChatState, thread: Thread, event: Extract<AgentEv
   return updateActiveAnswer(next, requireThread(next, thread.id), 'completed', 'result');
 }
 
-function completeRun(state: ChatState, thread: Thread): ChatState {
+function completeRun(state: ChatState, thread: Thread, terminalReason: Extract<AgentEvent, { type: 'task_completed' }>['content']['terminal_reason']): ChatState {
+  if (terminalReason === 'interrupted') return updateActiveAnswer(state, thread, 'stopped', 'stopped');
+  if (terminalReason === 'failed') return updateActiveAnswer(state, thread, 'error', 'error');
   return thread.lifecycle === 'stopped' || thread.lifecycle === 'error'
     ? state
     : updateActiveAnswer(state, thread, 'completed', 'completed');
@@ -384,22 +396,3 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
 function addDiagnostic(state: ChatState, event: AgentEvent, kind: Diagnostic['kind'], message: string, threadId?: string): ChatState {
   return { ...state, diagnostics: [...state.diagnostics, { kind, eventId: event.event_id, ...(threadId ? { threadId } : {}), message }] };
 }
-
-// Temporary SmartBar compatibility. Task 4 replaces this store with the reducer-driven runtime.
-export type StreamStatus = 'idle' | 'streaming' | 'interrupted' | 'finished' | 'error';
-export interface ChatPart { id: string; role: 'user' | 'assistant' | 'system'; type: 'message' | 'thinking' | 'citation' | 'error' | 'status'; text?: string; payload?: unknown; }
-export interface ChatThread { localId: string; sessionId?: string; parts: ChatPart[]; streamStatus: StreamStatus; }
-interface SessionState { activeThread: ChatThread; appendPart: (part: ChatPart) => void; appendAssistantDelta: (text: string) => void; setSessionId: (sessionId: string) => void; setStreamStatus: (status: StreamStatus) => void; }
-export const useSessionStore = create<SessionState>((set) => ({
-  activeThread: { localId: `thread_${crypto.randomUUID()}`, parts: [], streamStatus: 'idle' },
-  appendPart: (part) => set((state) => ({ activeThread: { ...state.activeThread, parts: [...state.activeThread.parts, part] } })),
-  appendAssistantDelta: (text) => set((state) => {
-    const parts = [...state.activeThread.parts];
-    const lastPart = parts.at(-1);
-    if (lastPart?.role === 'assistant' && lastPart.type === 'message') parts[parts.length - 1] = { ...lastPart, text: `${lastPart.text || ''}${text}` };
-    else parts.push({ id: crypto.randomUUID(), role: 'assistant', type: 'message', text });
-    return { activeThread: { ...state.activeThread, parts } };
-  }),
-  setSessionId: (sessionId) => set((state) => ({ activeThread: { ...state.activeThread, sessionId } })),
-  setStreamStatus: (streamStatus) => set((state) => ({ activeThread: { ...state.activeThread, streamStatus } })),
-}));

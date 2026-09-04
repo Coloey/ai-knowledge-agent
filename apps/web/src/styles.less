@@ -277,16 +277,53 @@ body {
   border-color: #1f5ac4;
 }
 
-.message-row.thinking .message-bubble {
+.assistant-chunks {
+  display: grid;
+  gap: 8px;
+}
+
+.message-bubble.chunk-thinking,
+.message-bubble.thinking {
   color: #536073;
   background: #fff7e6;
   border-color: #ffe0a3;
 }
 
-.message-row.error .message-bubble {
+.chunk-thinking small,
+.tool-payload small,
+.tool-name {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.message-row.error .message-bubble,
+.message-row.system.error .message-bubble,
+.tool-card.error {
   color: #b42318;
   background: #fff1f0;
   border-color: #ffccc7;
+}
+
+.tool-card {
+  display: grid;
+  width: min(100%, 620px);
+  gap: 8px;
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-payload pre {
+  max-height: 180px;
+  margin: 4px 0 0;
+  overflow: auto;
+  color: inherit;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
 }
 
 .citation-list {

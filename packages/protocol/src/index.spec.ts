@@ -32,7 +32,7 @@ describe('decodeAgentEvent', () => {
       ['artifact', { artifacts: [{ id: 'artifact_1', name: 'report.md' }] }],
       ['result', { final_message_chunk_id: 'message_1', text: 'final answer', artifacts: [{ id: 'artifact_1' }] }],
       ['error', { error_code: 43106, message: 'Generation failed' }],
-      ['task_completed', { message: 'done' }],
+      ['task_completed', { terminal_reason: 'completed', message: 'done' }],
       ['heartbeat', { at: 1_725_000_000_001 }],
     ];
 
@@ -59,6 +59,8 @@ describe('decodeAgentEvent', () => {
     ['malformed result content', JSON.stringify(event('result', { final_message_chunk_id: 'message_1', text: null }))],
     ['missing final message chunk ID', JSON.stringify(event('result', { text: 'done' }))],
     ['malformed error content', JSON.stringify(event('error', { message: 1 }))],
+    ['missing terminal reason', JSON.stringify(event('task_completed', { message: 'done' }))],
+    ['malformed terminal reason', JSON.stringify(event('task_completed', { terminal_reason: 'cancelled' }))],
     ['malformed heartbeat content', JSON.stringify(event('heartbeat', { at: 'now' }))],
   ])('rejects %s', (_label, raw) => {
     expect(() => decodeAgentEvent(raw)).toThrow();

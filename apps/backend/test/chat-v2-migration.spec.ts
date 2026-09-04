@@ -50,6 +50,7 @@ describe('AgentEvent V2 migration contract', () => {
 
     expect(migration).toContain(`WHERE "answer"."status" IN ('finished', 'failed', 'interrupted')`);
     expect(migration).toContain(`"event"."type" = 'task_completed'`);
+    expect(migration).toContain(`'terminal_reason', CASE`);
     expect(demoteNonFinishedResult).toBeGreaterThan(-1);
     expect(demoteNonFailedError).toBeGreaterThan(demoteNonFinishedResult);
     expect(insertResult).toBeGreaterThan(-1);

@@ -1,4 +1,4 @@
-import React, { createContext, useContext } from 'react';
+import React, { createContext, useContext, useMemo } from 'react';
 
 export interface ApiClientOptions {
   baseURL: string;
@@ -63,11 +63,12 @@ export class AuthExpiredError extends Error {
 export class ApiClient {
   constructor(private readonly options: ApiClientOptions) {}
 
-  async post<T>(path: string, body: unknown): Promise<T> {
+  async post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
     const response = await fetch(`${this.options.baseURL}${path}`, {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
+      signal,
     });
     const payload = (await response.json()) as ApiResponse<T>;
     if (response.status === 401) {
@@ -144,7 +145,11 @@ function extractErrorMessage(payload: ApiResponse<unknown>, fallback: string) {
 const ApiContext = createContext<ApiClient | null>(null);
 
 export function ApiProvider(props: React.PropsWithChildren<ApiClientOptions>) {
-  return <ApiContext.Provider value={new ApiClient(props)}>{props.children}</ApiContext.Provider>;
+  const client = useMemo(
+    () => new ApiClient({ baseURL: props.baseURL, ...(props.token ? { token: props.token } : {}) }),
+    [props.baseURL, props.token],
+  );
+  return <ApiContext.Provider value={client}>{props.children}</ApiContext.Provider>;
 }
 
 export function useApiClient(): ApiClient {

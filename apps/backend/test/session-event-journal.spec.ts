@@ -89,7 +89,11 @@ describe('SessionEventJournal stored event decoding', () => {
     expect(transaction).toHaveBeenCalledOnce();
     expect(inserted).toMatchObject([
       { type: 'result', seq: 5, contentJson: { final_message_chunk_id: 'message_1', text: 'answer' } },
-      { type: 'task_completed', seq: 6, contentJson: { message: 'done' } },
+      {
+        type: 'task_completed',
+        seq: 6,
+        contentJson: { terminal_reason: 'completed', message: 'done' },
+      },
     ]);
     expect(updated).toMatchObject([
       { lastEventSeq: 6, status: 'finished', terminalReason: 'completed', completedAt: expect.any(Date) },
@@ -140,7 +144,13 @@ describe('SessionEventJournal stored event decoding', () => {
       text: 'answer',
     });
 
-    expect(inserted).toMatchObject([{ type: 'task_completed', seq: 6, contentJson: { message: 'done' } }]);
+    expect(inserted).toMatchObject([
+      {
+        type: 'task_completed',
+        seq: 6,
+        contentJson: { terminal_reason: 'completed', message: 'done' },
+      },
+    ]);
     expect(updated).toMatchObject([{ lastEventSeq: 6, status: 'finished', terminalReason: 'completed' }]);
     expect(terminal.signal.appended).toBe(false);
     expect(terminal.completion.appended).toBe(true);
@@ -226,7 +236,7 @@ function completedEvent(): Extract<AgentEvent, { type: 'task_completed' }> {
     seq: 6,
     timestamp: 1_725_000_000_006,
     type: 'task_completed',
-    content: { message: 'done' },
+    content: { terminal_reason: 'completed', message: 'done' },
   };
 }
 
@@ -247,7 +257,7 @@ function storedCompletion() {
     schemaVersion: 2,
     seq: 6,
     type: 'task_completed',
-    contentJson: { message: 'done' },
+    contentJson: { terminal_reason: 'completed', message: 'done' },
     createdAt: new Date('2026-09-03T00:00:06.000Z'),
   };
 }

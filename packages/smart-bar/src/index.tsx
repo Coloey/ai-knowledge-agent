@@ -1,98 +1,45 @@
-import React, { useRef, useState } from 'react';
-import { Alert, Button, Empty, Input, Space, Tag } from 'antd';
+import React, { useState } from 'react';
+import { Button, Empty, Input, Space, Tag } from 'antd';
 
-import { useApiClient } from '@agent/api';
-import { useSessionStore } from '@agent/domain';
+import {
+  useChatCommands,
+  useCurrentThread,
+  useOrderedChunks,
+  useOrderedParts,
+} from '@agent/chat-runtime';
+import type {
+  AssistantAnswerPart,
+  Chunk,
+  MessageChunk,
+  NormalizedPart,
+  SystemNoticePart,
+  ToolChunk,
+} from '@agent/domain';
+import type { Citation, JsonValue } from '@agent/protocol';
 
-interface SmartBarEvent {
-  type: string;
-  session_id: string;
-  content: Record<string, unknown>;
-}
+const EXAMPLE_PROMPTS = [
+  '总结我的知识库',
+  '提炼这批文档的行动项',
+  '列出资料里的风险点',
+];
+const TOOL_LABELS: Record<string, string> = {
+  search: 'Knowledge search',
+  retrieval: 'Knowledge retrieval',
+};
 
-const EXAMPLE_PROMPTS = ['总结我的知识库', '提炼这批文档的行动项', '列出资料里的风险点'];
-
-export function SmartBar(props: { workspaceId: string }) {
-  const api = useApiClient();
-  const abortRef = useRef<AbortController | null>(null);
+export function SmartBar() {
+  const commands = useChatCommands();
+  const thread = useCurrentThread();
+  const parts = useOrderedParts(thread.id);
   const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const { activeThread, appendAssistantDelta, appendPart, setSessionId, setStreamStatus } = useSessionStore();
+  const isRunning =
+    thread.lifecycle === 'streaming' || thread.lifecycle === 'result';
 
-  async function send(nextMessage = message) {
+  function send(nextMessage = message) {
     const text = nextMessage.trim();
-    if (!text || activeThread.streamStatus === 'streaming') return;
-
-    const controller = new AbortController();
-    abortRef.current = controller;
+    if (!text || isRunning) return;
     setMessage('');
-    setError('');
-    setStreamStatus('streaming');
-    appendPart({ id: crypto.randomUUID(), role: 'user', type: 'message', text });
-
-    try {
-      const response = await api.stream(
-        '/notta-brain/session/send-message',
-        {
-          session_id: activeThread.sessionId,
-          request_id: crypto.randomUUID(),
-          workspace_id: props.workspaceId,
-          message: text,
-          timezone_offset: new Date().getTimezoneOffset(),
-          display_language: 'zh-CN',
-          options: {},
-        },
-        controller.signal,
-      );
-
-      if (!response.ok) {
-        throw new Error(response.statusText || 'SSE request failed');
-      }
-      if (!response.body) {
-        throw new Error('SSE response body is empty');
-      }
-
-      await readSSE(response.body.getReader(), (event) => {
-        setSessionId(event.session_id);
-        if (event.type === 'data') {
-          appendAssistantDelta(String(event.content.text || ''));
-        }
-        if (event.type === 'thinking') {
-          appendPart({ id: crypto.randomUUID(), role: 'assistant', type: 'thinking', text: String(event.content.text || '') });
-        }
-        if (event.type === 'citation') {
-          appendPart({ id: crypto.randomUUID(), role: 'assistant', type: 'citation', payload: event.content });
-        }
-        if (event.type === 'error') {
-          setStreamStatus('error');
-          appendPart({ id: crypto.randomUUID(), role: 'assistant', type: 'error', text: String(event.content.message || '') });
-        }
-        if (event.type === 'task_completed') {
-          setStreamStatus('finished');
-        }
-      });
-      setStreamStatus('finished');
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') {
-        setStreamStatus('interrupted');
-        return;
-      }
-      const errorMessage = err instanceof Error ? err.message : 'Send failed';
-      setError(errorMessage);
-      setStreamStatus('error');
-      appendPart({ id: crypto.randomUUID(), role: 'assistant', type: 'error', text: errorMessage });
-    }
-  }
-
-  async function stop() {
-    if (activeThread.sessionId) {
-      await api.post('/notta-brain/session/interrupt', {
-        workspace_id: props.workspaceId,
-        session_id: activeThread.sessionId,
-      });
-    }
-    abortRef.current?.abort();
-    setStreamStatus('interrupted');
+    void commands.send(text, thread.id).catch(() => undefined);
   }
 
   return (
@@ -100,25 +47,18 @@ export function SmartBar(props: { workspaceId: string }) {
       <header className="smartbar-header">
         <div>
           <strong>SmartBar</strong>
-          <span>Session {activeThread.sessionId || activeThread.localId}</span>
+          <span>Session {thread.sessionId || thread.id}</span>
         </div>
-        <Tag color={statusColor(activeThread.streamStatus)}>{activeThread.streamStatus}</Tag>
+        <Tag color={statusColor(thread.lifecycle)}>{thread.lifecycle}</Tag>
       </header>
 
       <section className="smartbar-messages">
-        {activeThread.parts.length ? (
-          activeThread.parts.map((part) => (
-            <article key={part.id} className={`message-row ${part.role} ${part.type}`}>
-              <div className="message-role">{part.type === 'thinking' ? 'thinking' : part.role}</div>
-              <div className="message-bubble">{part.text || renderPayload(part.payload)}</div>
-            </article>
-          ))
+        {parts.length ? (
+          parts.map((part) => <PartView key={part.id} part={part} />)
         ) : (
           <Empty description="Ask a question after uploading documents." />
         )}
       </section>
-
-      {error ? <Alert type="error" message={error} showIcon /> : null}
 
       <Space wrap>
         {EXAMPLE_PROMPTS.map((prompt) => (
@@ -135,16 +75,16 @@ export function SmartBar(props: { workspaceId: string }) {
           onPressEnter={(event) => {
             if (!event.shiftKey) {
               event.preventDefault();
-              void send();
+              send();
             }
           }}
           placeholder="Ask anything about your knowledge base..."
           autoSize={{ minRows: 2, maxRows: 6 }}
         />
-        <Button type="primary" onClick={() => send()} disabled={activeThread.streamStatus === 'streaming'}>
+        <Button type="primary" onClick={() => send()} disabled={isRunning}>
           Send
         </Button>
-        <Button onClick={stop} disabled={activeThread.streamStatus !== 'streaming'}>
+        <Button onClick={() => commands.stop(thread.id)} disabled={!isRunning}>
           Stop
         </Button>
       </footer>
@@ -152,49 +92,130 @@ export function SmartBar(props: { workspaceId: string }) {
   );
 }
 
-function renderPayload(payload: unknown) {
-  if (!payload) return '';
-  if (typeof payload !== 'object') return String(payload);
-  const citations = (payload as { citations?: Array<{ title?: string; page?: number; snippet?: string }> }).citations;
-  if (!citations) return JSON.stringify(payload);
+function PartView(props: { part: NormalizedPart }) {
+  if (props.part.kind === 'assistant_answer')
+    return <AssistantPartView part={props.part} />;
+  if (props.part.kind === 'system_notice')
+    return <SystemNoticeView notice={props.part} />;
+  return (
+    <article className="message-row user message">
+      <div className="message-role">user</div>
+      <div className="message-bubble">{props.part.text}</div>
+    </article>
+  );
+}
+
+function AssistantPartView(props: { part: AssistantAnswerPart }) {
+  const chunks = useOrderedChunks(props.part.id);
+  return (
+    <article className={`message-row assistant ${props.part.status}`}>
+      <div className="message-role">assistant</div>
+      <div className="assistant-chunks">
+        {chunks.map((chunk) => (
+          <ChunkView key={chunk.id} chunk={chunk} />
+        ))}
+        {!chunks.length && props.part.status === 'streaming' ? (
+          <div className="message-bubble thinking">Preparing response...</div>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function ChunkView(props: { chunk: Chunk }) {
+  if (props.chunk.kind === 'thinking') {
+    return (
+      <section
+        className={`message-bubble chunk-thinking ${props.chunk.status}`}
+      >
+        <small>thinking</small>
+        <div>{props.chunk.text}</div>
+      </section>
+    );
+  }
+  if (props.chunk.kind === 'tool') return <ToolView tool={props.chunk} />;
+  return <MessageView message={props.chunk} />;
+}
+
+function MessageView(props: { message: MessageChunk }) {
+  return (
+    <section className={`message-bubble chunk-message ${props.message.status}`}>
+      <div>{props.message.text}</div>
+      {props.message.citations.length ? (
+        <CitationList citations={props.message.citations} />
+      ) : null}
+    </section>
+  );
+}
+
+function ToolView(props: { tool: ToolChunk }) {
+  const knownLabel = TOOL_LABELS[props.tool.name];
+  return (
+    <section className={`message-bubble tool-card ${props.tool.status}`}>
+      <div className="tool-card-header">
+        <strong>{knownLabel || 'Tool call'}</strong>
+        <Tag color={props.tool.isError ? 'error' : 'default'}>
+          {props.tool.status}
+        </Tag>
+      </div>
+      <span className="tool-name">{props.tool.name}</span>
+      {props.tool.input === undefined ? null : (
+        <JsonBlock label="Input" value={props.tool.input} />
+      )}
+      {props.tool.result === undefined ? null : (
+        <JsonBlock label="Result" value={props.tool.result} />
+      )}
+    </section>
+  );
+}
+
+function JsonBlock(props: { label: string; value: JsonValue }) {
+  return (
+    <div className="tool-payload">
+      <small>{props.label}</small>
+      <pre>{formatJson(props.value)}</pre>
+    </div>
+  );
+}
+
+function CitationList(props: { citations: Citation[] }) {
   return (
     <div className="citation-list">
-      {citations.map((citation, index) => (
-        <div key={`${citation.title}-${index}`} className="citation-item">
+      {props.citations.map((citation, index) => (
+        <div
+          key={
+            citation.id ||
+            `${citation.file_id || citation.title || 'citation'}-${index}`
+          }
+          className="citation-item"
+        >
           <strong>{citation.title || `Citation ${index + 1}`}</strong>
-          <span>{citation.page ? `p.${citation.page}` : 'no page'}</span>
-          <p>{citation.snippet}</p>
+          <span>
+            {citation.page === undefined ? 'no page' : `p.${citation.page}`}
+          </span>
+          {citation.snippet ? <p>{citation.snippet}</p> : null}
         </div>
       ))}
     </div>
   );
 }
 
-function statusColor(status: string) {
-  if (status === 'streaming') return 'processing';
-  if (status === 'finished') return 'success';
-  if (status === 'error') return 'error';
-  return 'default';
+function SystemNoticeView(props: { notice: SystemNoticePart }) {
+  return (
+    <article className={`message-row system ${props.notice.level}`}>
+      <div className="message-role">system</div>
+      <div className="message-bubble">{props.notice.text}</div>
+    </article>
+  );
 }
 
-async function readSSE(reader: ReadableStreamDefaultReader<Uint8Array>, onEvent: (event: SmartBarEvent) => void) {
-  const decoder = new TextDecoder();
-  let buffer = '';
+function formatJson(value: JsonValue): string {
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+}
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split('\n\n');
-    buffer = blocks.pop() || '';
-
-    for (const block of blocks) {
-      const dataLine = block
-        .split('\n')
-        .find((line) => line.startsWith('data: '))
-        ?.replace('data: ', '');
-      if (!dataLine || dataLine === '{"done":true}') continue;
-      onEvent(JSON.parse(dataLine) as SmartBarEvent);
-    }
-  }
+function statusColor(status: string) {
+  if (status === 'streaming') return 'processing';
+  if (status === 'completed' || status === 'result') return 'success';
+  if (status === 'error') return 'error';
+  return 'default';
 }

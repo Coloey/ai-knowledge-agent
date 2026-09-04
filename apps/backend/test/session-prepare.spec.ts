@@ -109,7 +109,7 @@ describe('SessionsService prepare', () => {
       event_id: 'event_completed',
       seq: 2,
       type: 'task_completed',
-      content: { message: 'done' },
+      content: { terminal_reason: 'completed', message: 'done' },
     };
     const existing = {
       sessionId: 'session_1',

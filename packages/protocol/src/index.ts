@@ -60,7 +60,10 @@ export interface ErrorContent {
   error_code?: number | string;
 }
 
+export type TerminalReason = 'completed' | 'failed' | 'interrupted';
+
 export interface TaskCompletedContent {
+  terminal_reason: TerminalReason;
   message?: string;
 }
 
@@ -266,7 +269,10 @@ function decodeContent(type: AgentEvent['type'], value: unknown): AgentEvent['co
       };
     case 'task_completed':
       requireOptionalString(content.message, 'task_completed.content.message');
-      return content as TaskCompletedContent;
+      return {
+        terminal_reason: requireTerminalReason(content.terminal_reason),
+        ...(content.message === undefined ? {} : { message: content.message as string }),
+      };
     case 'heartbeat':
       if (content.at !== undefined && (typeof content.at !== 'number' || !Number.isFinite(content.at))) {
         throw new AgentEventDecodeError('heartbeat.content.at must be a finite number');
@@ -325,6 +331,15 @@ function requireOptionalBoolean(value: unknown, name: string): boolean | undefin
   if (value === undefined) return undefined;
   if (typeof value !== 'boolean') {
     throw new AgentEventDecodeError(`${name} must be a boolean`);
+  }
+  return value;
+}
+
+function requireTerminalReason(value: unknown): TerminalReason {
+  if (value !== 'completed' && value !== 'failed' && value !== 'interrupted') {
+    throw new AgentEventDecodeError(
+      'task_completed.content.terminal_reason must be completed, failed, or interrupted',
+    );
   }
   return value;
 }

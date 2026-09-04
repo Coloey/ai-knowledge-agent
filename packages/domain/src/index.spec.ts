@@ -71,14 +71,14 @@ describe('normalized chat reducer', () => {
       event('task_started', { message: 'first question' }, { event_id: 'start-1', request_id: 'request-1', question_id: 'question-1', answer_id: 'answer-1', run_id: 'run-1', seq: 0 }),
       event('data', { chunk_id: 'message-1', text: 'first answer' }, { event_id: 'data-1', run_id: 'run-1', seq: 1 }),
       event('result', { final_message_chunk_id: 'message-1', text: 'first answer' }, { event_id: 'result-1', run_id: 'run-1', seq: 2 }),
-      event('task_completed', {}, { event_id: 'complete-1', run_id: 'run-1', seq: 3 }),
+      event('task_completed', { terminal_reason: 'completed' }, { event_id: 'complete-1', run_id: 'run-1', seq: 3 }),
     ];
     const secondTurn = [
       event('task_started', { message: 'second question' }, { event_id: 'start-2', request_id: 'request-2', question_id: 'question-2', answer_id: 'answer-2', run_id: 'run-2', seq: 0 }),
       event('thinking', { chunk_id: 'thinking-2', text: 'thinking' }, { event_id: 'thinking-2', run_id: 'run-2', answer_id: 'answer-2', question_id: 'question-2', seq: 1 }),
       event('data', { chunk_id: 'message-2', text: 'second answer' }, { event_id: 'data-2', run_id: 'run-2', answer_id: 'answer-2', question_id: 'question-2', seq: 2 }),
       event('result', { final_message_chunk_id: 'message-2', text: 'second answer' }, { event_id: 'result-2', run_id: 'run-2', answer_id: 'answer-2', question_id: 'question-2', seq: 3 }),
-      event('task_completed', {}, { event_id: 'complete-2', run_id: 'run-2', answer_id: 'answer-2', question_id: 'question-2', seq: 4 }),
+      event('task_completed', { terminal_reason: 'completed' }, { event_id: 'complete-2', run_id: 'run-2', answer_id: 'answer-2', question_id: 'question-2', seq: 4 }),
     ];
     const history = reduceAgentEventBatch(createChatState('session-1'), [...firstTurn, ...secondTurn]);
 
@@ -111,7 +111,7 @@ describe('normalized chat reducer', () => {
     ]);
 
     state = reduceAgentEvent(state, event('result', { final_message_chunk_id: 'message-id', text: 'final' }, { event_id: 'result', seq: 5 }));
-    state = reduceAgentEvent(state, event('task_completed', {}, { event_id: 'complete', seq: 6 }));
+    state = reduceAgentEvent(state, event('task_completed', { terminal_reason: 'completed' }, { event_id: 'complete', seq: 6 }));
     state = reduceAgentEvent(state, event('citation', { message_chunk_id: 'message-id', citations: [{ title: 'Source' }] }, { event_id: 'late-citation', seq: 7 }));
     expect(state.threads['session-1'].lifecycle).toBe('completed');
     expect(state.chunks['message-id']).toMatchObject({ status: 'completed', text: 'final', citations: [{ title: 'Source' }] });
@@ -126,7 +126,7 @@ describe('normalized chat reducer', () => {
     let state = reduce(createChatState('session-1'), [
       event('task_started', { message: 'one' }, { event_id: 'start-1', seq: 0 }),
       event('result', { final_message_chunk_id: 'message-1', text: 'one' }, { event_id: 'result-1', seq: 1 }),
-      event('task_completed', {}, { event_id: 'complete-1', seq: 2 }),
+      event('task_completed', { terminal_reason: 'completed' }, { event_id: 'complete-1', seq: 2 }),
     ]);
     state = appendLocalUserMessage(state, 'two', { requestId: 'request-2' });
     const failed = recordTransportError(state, 'offline');
@@ -137,12 +137,12 @@ describe('normalized chat reducer', () => {
 
     let stopped = reduce(createChatState('session-stop'), [event('task_started', { message: 'stop' }, { event_id: 'start-stop', session_id: 'session-stop', run_id: 'run-stop', seq: 0 })]);
     stopped = stopRunLocally(stopped, 'session-stop');
-    stopped = reduceAgentEvent(stopped, event('task_completed', {}, { event_id: 'complete-stop', session_id: 'session-stop', run_id: 'run-stop', seq: 1 }));
+    stopped = reduceAgentEvent(stopped, event('task_completed', { terminal_reason: 'interrupted' }, { event_id: 'complete-stop', session_id: 'session-stop', run_id: 'run-stop', seq: 1 }));
     expect(stopped.threads['session-stop'].lifecycle).toBe('stopped');
     const errored = reduce(createChatState('session-error'), [
       event('task_started', { message: 'error' }, { event_id: 'start-error', session_id: 'session-error', run_id: 'run-error', seq: 0 }),
       event('error', { message: 'failed' }, { event_id: 'error', session_id: 'session-error', run_id: 'run-error', seq: 1 }),
-      event('task_completed', {}, { event_id: 'complete-error', session_id: 'session-error', run_id: 'run-error', seq: 2 }),
+      event('task_completed', { terminal_reason: 'failed' }, { event_id: 'complete-error', session_id: 'session-error', run_id: 'run-error', seq: 2 }),
     ]);
     expect(errored.threads['session-error'].lifecycle).toBe('error');
     const repeated = recordTransportError(failed, 'offline again', 'session-1');
@@ -155,7 +155,7 @@ describe('normalized chat reducer', () => {
     const completed = reduce(createChatState('session-completed'), [
       event('task_started', { message: 'completed' }, { event_id: 'start-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 0 }),
       event('result', { final_message_chunk_id: 'message-completed', text: 'done' }, { event_id: 'result-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 1 }),
-      event('task_completed', {}, { event_id: 'complete-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 2 }),
+      event('task_completed', { terminal_reason: 'completed' }, { event_id: 'complete-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 2 }),
     ]);
     const repeatedStart = reduceAgentEvent(completed, event('task_started', { message: 'completed' }, { event_id: 'repeat-completed', session_id: 'session-completed', run_id: 'run-completed', seq: 3 }));
     expect(recordTransportError(completed, 'late transport', 'session-completed')).toBe(completed);
