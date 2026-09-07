@@ -42,6 +42,12 @@ const TOOL_LABELS: Record<string, string> = {
   search: 'Knowledge search',
   retrieval: 'Knowledge retrieval',
 };
+const ARTIFACT_STATUS_LABELS: Record<ArtifactRef['status'], string> = {
+  queued: 'Queued',
+  processing: 'Generating',
+  completed: 'Ready',
+  failed: 'Failed',
+};
 
 export function SmartBar() {
   const commands = useChatCommands();
@@ -293,37 +299,35 @@ function artifactStateContent(
   download: () => void,
   retry: () => void,
 ) {
-  switch (artifact.status) {
-    case 'queued':
-    case 'processing':
-      return (
-        <div className="artifact-progress" role="status">
-          <span>{artifactStatusLabel(artifact.status)}</span>
-          <Progress percent={artifact.progress ?? 0} size="small" />
-        </div>
-      );
-    case 'completed':
-      return (
-        <div className="artifact-actions">
-          <Button onClick={() => void openPreview()}>
-            Preview {artifact.title}
-          </Button>
-          <Button loading={downloading} onClick={() => void download()}>
-            Download {artifact.title}
-          </Button>
-          {downloadError ? <div role="alert">{downloadError}</div> : null}
-        </div>
-      );
-    case 'failed':
-      return (
-        <div className="artifact-actions artifact-failed" role="alert">
-          <span>{artifact.error_message || 'Artifact generation failed.'}</span>
-          <Button loading={retrying} disabled={retrying} onClick={retry}>
-            Retry {artifact.title}
-          </Button>
-        </div>
-      );
+  if (artifact.status === 'queued' || artifact.status === 'processing') {
+    return (
+      <div className="artifact-progress" role="status">
+        <span>{artifactStatusLabel(artifact.status)}</span>
+        <Progress percent={artifact.progress ?? 0} size="small" />
+      </div>
+    );
   }
+  if (artifact.status === 'completed') {
+    return (
+      <div className="artifact-actions">
+        <Button onClick={() => void openPreview()}>
+          Preview {artifact.title}
+        </Button>
+        <Button loading={downloading} onClick={() => void download()}>
+          Download {artifact.title}
+        </Button>
+        {downloadError ? <div role="alert">{downloadError}</div> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="artifact-actions artifact-failed" role="alert">
+      <span>{artifact.error_message || 'Artifact generation failed.'}</span>
+      <Button loading={retrying} disabled={retrying} onClick={retry}>
+        Retry {artifact.title}
+      </Button>
+    </div>
+  );
 }
 
 export function artifactContentPath(
@@ -344,16 +348,7 @@ export function artifactFilename(title: string): string {
 }
 
 function artifactStatusLabel(status: ArtifactRef['status']) {
-  switch (status) {
-    case 'queued':
-      return 'Queued';
-    case 'processing':
-      return 'Generating';
-    case 'completed':
-      return 'Ready';
-    case 'failed':
-      return 'Failed';
-  }
+  return ARTIFACT_STATUS_LABELS[status];
 }
 
 function artifactStatusColor(status: ArtifactRef['status']) {

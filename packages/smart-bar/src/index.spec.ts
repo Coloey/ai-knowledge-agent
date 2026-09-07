@@ -34,7 +34,7 @@ describe('SmartBar presentation boundary', () => {
   it.each(['queued', 'processing', 'completed', 'failed'])(
     'renders an accessible artifact state for %s',
     (status) => {
-      expect(source).toContain(`case '${status}'`);
+      expect(source).toContain(`${status}:`);
     },
   );
 
