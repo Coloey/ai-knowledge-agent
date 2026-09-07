@@ -7,8 +7,10 @@ import {
   recordTransportError,
   reduceAgentEvent,
   reduceAgentEventBatch,
+  selectAnswerArtifacts,
   selectOrderedChunks,
   selectOrderedParts,
+  selectThreadArtifacts,
   stopRunLocally,
 } from './index';
 
@@ -305,7 +307,14 @@ describe('normalized chat reducer', () => {
       artifacts,
       event(
         'artifact',
-        { artifact: { name: 'one' } },
+        {
+          artifact: {
+            id: 'artifact-1',
+            kind: 'document',
+            title: 'One',
+            status: 'queued',
+          },
+        },
         {
           event_id: 'artifact-one',
           session_id: 'session-artifacts',
@@ -318,7 +327,14 @@ describe('normalized chat reducer', () => {
       artifacts,
       event(
         'artifact',
-        { artifact: { name: 'two' } },
+        {
+          artifact: {
+            id: 'artifact-1',
+            kind: 'document',
+            title: 'One updated',
+            status: 'processing',
+          },
+        },
         {
           event_id: 'artifact-two',
           session_id: 'session-artifacts',
@@ -327,9 +343,27 @@ describe('normalized chat reducer', () => {
         },
       ),
     );
-    expect(Object.keys(artifacts.artifacts)).toEqual([
-      'artifact:artifact-one:0',
-      'artifact:artifact-two:0',
+    const artifactAnswerId =
+      artifacts.threads['session-artifacts'].answerPartId!;
+    expect(artifacts.artifacts).toEqual({
+      'artifact-1': {
+        id: 'artifact-1',
+        kind: 'document',
+        title: 'One updated',
+        status: 'processing',
+      },
+    });
+    expect(artifacts.parts[artifactAnswerId]).toMatchObject({
+      artifactIds: ['artifact-1'],
+    });
+    expect(artifacts.threads['session-artifacts'].artifactIds).toEqual([
+      'artifact-1',
+    ]);
+    expect(selectAnswerArtifacts(artifacts, artifactAnswerId)).toEqual([
+      artifacts.artifacts['artifact-1'],
+    ]);
+    expect(selectThreadArtifacts(artifacts, 'session-artifacts')).toEqual([
+      artifacts.artifacts['artifact-1'],
     ]);
   });
 

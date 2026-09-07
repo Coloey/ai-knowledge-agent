@@ -191,6 +191,20 @@ describe('FetchSseTransport', () => {
 });
 
 describe('ChatRuntime', () => {
+  it('passes a document artifact request as per-send options only', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createRuntime(transport);
+    const sending = runtime.send('create a report', 'thread-1', {
+      outputArtifact: 'document',
+    });
+
+    expect(transport.streams[0].input.options).toEqual({
+      output_artifact: 'document',
+    });
+    transport.streams[0].reject(new Error('transport stopped'));
+    await sending;
+  });
+
   it('isolates interleaved streams for two threads and refuses a concurrent same-thread send', async () => {
     const transport = new ControlledTransport();
     const runtime = createRuntime(transport);
@@ -578,6 +592,9 @@ describe('ChatRuntime', () => {
     expect(historyRuntime.getChunks('answer:answer-run-history')).toEqual(
       liveRuntime.getChunks('answer:answer-run-history'),
     );
+    expect(historyRuntime.getAnswerArtifacts('answer:answer-run-history')).toEqual(
+      liveRuntime.getAnswerArtifacts('answer:answer-run-history'),
+    );
   });
 
   it('restores an interrupted Session Detail with the same stopped semantics as live streaming', async () => {
@@ -891,7 +908,18 @@ function completeEvents(
     runEvent(
       input,
       'result',
-      { final_message_chunk_id: `message-${runId}`, text: answer },
+      {
+        final_message_chunk_id: `message-${runId}`,
+        text: answer,
+        artifacts: [
+          {
+            id: `artifact-${runId}`,
+            kind: 'document',
+            title: 'Report',
+            status: 'queued',
+          },
+        ],
+      },
       sessionId,
       runId,
       6,

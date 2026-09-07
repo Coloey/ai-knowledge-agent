@@ -40,20 +40,41 @@ export interface CitationContent {
   citations: Citation[];
 }
 
-export interface Artifact {
-  id?: string;
-  name?: string;
+export type ArtifactKind =
+  'document' | 'presentation' | 'spreadsheet' | 'image' | 'html';
+
+export type ArtifactStatus = 'queued' | 'processing' | 'completed' | 'failed';
+
+export interface ArtifactRef {
+  id: string;
+  kind: ArtifactKind;
+  title: string;
+  status: ArtifactStatus;
+}
+
+export interface ArtifactDetail extends ArtifactRef {
+  workspace_id: string;
+  session_id: string;
+  answer_id: string;
+  mime_type?: string;
+  size?: number;
+  progress: number;
+  version: number;
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface ArtifactContent {
-  artifact?: Artifact;
-  artifacts?: Artifact[];
+  artifact?: ArtifactRef;
+  artifacts?: ArtifactRef[];
 }
 
 export interface ResultContent {
   final_message_chunk_id: string;
   text: string;
-  artifacts?: Artifact[];
+  artifacts?: ArtifactRef[];
 }
 
 export interface ErrorContent {
@@ -457,20 +478,61 @@ function requireArtifactContent(
   };
 }
 
-function requireArtifactArray(value: unknown): Artifact[] {
+function requireArtifactArray(value: unknown): ArtifactRef[] {
   if (!Array.isArray(value)) {
     throw new AgentEventDecodeError('artifacts must be an array');
+  }
+  if (!value.length) {
+    throw new AgentEventDecodeError('artifacts must not be empty');
   }
   return value.map((artifact, index) =>
     requireArtifact(artifact, `artifacts[${index}]`),
   );
 }
 
-function requireArtifact(value: unknown, name: string): Artifact {
+function requireArtifact(value: unknown, name: string): ArtifactRef {
   const artifact = requireRecord(value, name);
-  requireOptionalString(artifact.id, `${name}.id`);
-  requireOptionalString(artifact.name, `${name}.name`);
-  return artifact as Artifact;
+  const allowed = new Set(['id', 'kind', 'title', 'status']);
+  for (const key of Object.keys(artifact)) {
+    if (!allowed.has(key)) {
+      throw new AgentEventDecodeError(`${name}.${key} is not allowed`);
+    }
+  }
+  return {
+    id: requireIdentity(artifact.id, `${name}.id`),
+    kind: requireArtifactKind(artifact.kind, `${name}.kind`),
+    title: requireIdentity(artifact.title, `${name}.title`),
+    status: requireArtifactStatus(artifact.status, `${name}.status`),
+  };
+}
+
+function requireArtifactKind(value: unknown, name: string): ArtifactKind {
+  if (
+    value !== 'document' &&
+    value !== 'presentation' &&
+    value !== 'spreadsheet' &&
+    value !== 'image' &&
+    value !== 'html'
+  ) {
+    throw new AgentEventDecodeError(
+      `${name} must be a supported artifact kind`,
+    );
+  }
+  return value;
+}
+
+function requireArtifactStatus(value: unknown, name: string): ArtifactStatus {
+  if (
+    value !== 'queued' &&
+    value !== 'processing' &&
+    value !== 'completed' &&
+    value !== 'failed'
+  ) {
+    throw new AgentEventDecodeError(
+      `${name} must be a supported artifact status`,
+    );
+  }
+  return value;
 }
 
 function requireErrorCode(value: unknown): number | string {

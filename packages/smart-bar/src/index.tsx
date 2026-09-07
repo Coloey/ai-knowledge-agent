@@ -1,9 +1,25 @@
 import React, { useState } from 'react';
-import { Button, Empty, Input, Space, Tag } from 'antd';
+import {
+  Button,
+  Checkbox,
+  Drawer,
+  Empty,
+  Input,
+  Progress,
+  Space,
+  Tag,
+} from 'antd';
+
+import {
+  useApiClient,
+  useArtifactDetail,
+  useRetryArtifact,
+} from '@agent/api';
 
 import {
   useChatCommands,
   useCurrentThread,
+  useAnswerArtifacts,
   useOrderedChunks,
   useOrderedParts,
 } from '@agent/chat-runtime';
@@ -15,7 +31,7 @@ import type {
   SystemNoticePart,
   ToolChunk,
 } from '@agent/domain';
-import type { Citation, JsonValue } from '@agent/protocol';
+import type { ArtifactRef, Citation, JsonValue } from '@agent/protocol';
 
 const EXAMPLE_PROMPTS = [
   '总结我的知识库',
@@ -26,20 +42,34 @@ const TOOL_LABELS: Record<string, string> = {
   search: 'Knowledge search',
   retrieval: 'Knowledge retrieval',
 };
+const ARTIFACT_STATUS_LABELS: Record<ArtifactRef['status'], string> = {
+  queued: 'Queued',
+  processing: 'Generating',
+  completed: 'Ready',
+  failed: 'Failed',
+};
 
 export function SmartBar() {
   const commands = useChatCommands();
   const thread = useCurrentThread();
   const parts = useOrderedParts(thread.id);
   const [message, setMessage] = useState('');
+  const [shouldGenerateReport, setShouldGenerateReport] = useState(false);
   const isRunning =
     thread.lifecycle === 'streaming' || thread.lifecycle === 'result';
 
   function send(nextMessage = message) {
     const text = nextMessage.trim();
     if (!text || isRunning) return;
+    const sending = commands.send(
+      text,
+      thread.id,
+      shouldGenerateReport ? { outputArtifact: 'document' } : undefined,
+    );
     setMessage('');
-    void commands.send(text, thread.id).catch(() => undefined);
+    void sending
+      .then(() => setShouldGenerateReport(false))
+      .catch(() => undefined);
   }
 
   return (
@@ -69,6 +99,13 @@ export function SmartBar() {
       </Space>
 
       <footer className="smartbar-input">
+        <Checkbox
+          checked={shouldGenerateReport}
+          disabled={isRunning}
+          onChange={(event) => setShouldGenerateReport(event.target.checked)}
+        >
+          生成报告
+        </Checkbox>
         <Input.TextArea
           value={message}
           onChange={(event) => setMessage(event.target.value)}
@@ -107,6 +144,7 @@ function PartView(props: { part: NormalizedPart }) {
 
 function AssistantPartView(props: { part: AssistantAnswerPart }) {
   const chunks = useOrderedChunks(props.part.id);
+  const artifacts = useAnswerArtifacts(props.part.id);
   return (
     <article className={`message-row assistant ${props.part.status}`}>
       <div className="message-role">assistant</div>
@@ -117,9 +155,210 @@ function AssistantPartView(props: { part: AssistantAnswerPart }) {
         {!chunks.length && props.part.status === 'streaming' ? (
           <div className="message-bubble thinking">Preparing response...</div>
         ) : null}
+        <ArtifactList artifacts={artifacts} />
       </div>
     </article>
   );
+}
+
+function ArtifactList(props: { artifacts: ArtifactRef[] }) {
+  return props.artifacts.length ? (
+    <section className="artifact-list" aria-label="Generated artifacts">
+      {props.artifacts.map((artifact) => (
+        <ArtifactCard key={artifact.id} artifact={artifact} />
+      ))}
+    </section>
+  ) : null;
+}
+
+interface PreviewState {
+  open: boolean;
+  loading: boolean;
+  content?: string;
+  error?: string;
+}
+
+function ArtifactCard(props: { artifact: ArtifactRef }) {
+  const client = useApiClient();
+  const detailQuery = useArtifactDetail(props.artifact.id);
+  const retry = useRetryArtifact(props.artifact.id);
+  const [preview, setPreview] = useState<PreviewState>({
+    open: false,
+    loading: false,
+  });
+  const [downloadError, setDownloadError] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const artifact = detailQuery.data || props.artifact;
+
+  async function openPreview() {
+    setPreview({ open: true, loading: true });
+    try {
+      const blob = await client.getBlob(
+        artifactContentPath(props.artifact.id, 'inline'),
+      );
+      setPreview({ open: true, loading: false, content: await blob.text() });
+    } catch (error) {
+      setPreview({
+        open: true,
+        loading: false,
+        error: errorMessage(error, 'Artifact preview could not be loaded.'),
+      });
+    }
+  }
+
+  async function download() {
+    setDownloadError('');
+    setDownloading(true);
+    try {
+      const blob = await client.getBlob(
+        artifactContentPath(props.artifact.id, 'attachment'),
+      );
+      const url = URL.createObjectURL(blob);
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = artifactFilename(artifact.title);
+        document.body.append(link);
+        link.click();
+        link.remove();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      setDownloadError(errorMessage(error, 'Artifact download could not start.'));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  if (detailQuery.isLoading) {
+    return (
+      <section className="artifact-card" aria-busy="true">
+        Loading artifact status...
+      </section>
+    );
+  }
+
+  if (detailQuery.isError) {
+    return (
+      <section className="artifact-card artifact-error" role="alert">
+        Artifact status could not be loaded. Try refreshing this session.
+      </section>
+    );
+  }
+
+  return (
+    <section className="artifact-card" aria-label={`Artifact ${artifact.title}`}>
+      <div className="artifact-card-header">
+        <div>
+          <strong>{artifact.title}</strong>
+          <span>Markdown report</span>
+        </div>
+        <Tag color={artifactStatusColor(artifact.status)}>
+          {artifactStatusLabel(artifact.status)}
+        </Tag>
+      </div>
+      {artifactStateContent(
+        artifact,
+        retry.isPending,
+        downloading,
+        downloadError,
+        openPreview,
+        download,
+        () => retry.mutate(),
+      )}
+      <Drawer
+        destroyOnClose
+        open={preview.open}
+        title={`Preview: ${artifact.title}`}
+        onClose={() => setPreview((current) => ({ ...current, open: false }))}
+      >
+        {preview.loading ? (
+          <div role="status">Loading preview...</div>
+        ) : preview.error ? (
+          <div role="alert">
+            {preview.error}
+            <Button type="link" onClick={() => void openPreview()}>
+              Retry preview
+            </Button>
+          </div>
+        ) : (
+          <pre className="artifact-preview-content">{preview.content}</pre>
+        )}
+      </Drawer>
+    </section>
+  );
+}
+
+function artifactStateContent(
+  artifact: ArtifactRef & { progress?: number; error_message?: string },
+  retrying: boolean,
+  downloading: boolean,
+  downloadError: string,
+  openPreview: () => void,
+  download: () => void,
+  retry: () => void,
+) {
+  if (artifact.status === 'queued' || artifact.status === 'processing') {
+    return (
+      <div className="artifact-progress" role="status">
+        <span>{artifactStatusLabel(artifact.status)}</span>
+        <Progress percent={artifact.progress ?? 0} size="small" />
+      </div>
+    );
+  }
+  if (artifact.status === 'completed') {
+    return (
+      <div className="artifact-actions">
+        <Button onClick={() => void openPreview()}>
+          Preview {artifact.title}
+        </Button>
+        <Button loading={downloading} onClick={() => void download()}>
+          Download {artifact.title}
+        </Button>
+        {downloadError ? <div role="alert">{downloadError}</div> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="artifact-actions artifact-failed" role="alert">
+      <span>{artifact.error_message || 'Artifact generation failed.'}</span>
+      <Button loading={retrying} disabled={retrying} onClick={retry}>
+        Retry {artifact.title}
+      </Button>
+    </div>
+  );
+}
+
+export function artifactContentPath(
+  artifactId: string,
+  disposition: 'inline' | 'attachment',
+): string {
+  return `/artifacts/${encodeURIComponent(artifactId)}/content?disposition=${disposition}`;
+}
+
+export function artifactFilename(title: string): string {
+  const safeTitle = title
+    .replace(/[\\/:*?"<>|\u0000-\u001F]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+  const filename = safeTitle || 'report';
+  return /\.md$/i.test(filename) ? filename : `${filename}.md`;
+}
+
+function artifactStatusLabel(status: ArtifactRef['status']) {
+  return ARTIFACT_STATUS_LABELS[status];
+}
+
+function artifactStatusColor(status: ArtifactRef['status']) {
+  if (status === 'completed') return 'success';
+  if (status === 'failed') return 'error';
+  return 'processing';
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function ChunkView(props: { chunk: Chunk }) {

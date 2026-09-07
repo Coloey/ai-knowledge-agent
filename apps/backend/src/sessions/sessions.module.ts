@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AiModule } from '../ai/ai.module';
+import { ArtifactModule } from '../artifacts/artifact.module';
 import { AuthModule } from '../auth/auth.module';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import { LlmService } from './llm.service';
@@ -12,7 +13,7 @@ import { SessionsController } from './sessions.controller';
 import { SessionsService } from './sessions.service';
 
 @Module({
-  imports: [AuthModule, WorkspacesModule, AiModule, SessionEventJournalModule],
+  imports: [AuthModule, WorkspacesModule, AiModule, ArtifactModule, SessionEventJournalModule],
   controllers: [SessionsController],
   providers: [SessionsService, RetrievalService, LlmService, SessionControlService, SessionRateLimitGuard],
 })

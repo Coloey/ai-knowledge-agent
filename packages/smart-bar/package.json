@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agent/api": "workspace:*",
     "@agent/chat-runtime": "workspace:*",
     "@agent/domain": "workspace:*",
     "@agent/protocol": "workspace:*",

@@ -5,7 +5,13 @@ import type { Queue } from 'bullmq';
 
 import { DatabaseService } from '../database/database.service';
 import { outboxEvents } from '../database/schema';
-import { DELETE_LIBRARY_OBJECT_JOB, LIBRARY_PARSE_QUEUE, PARSE_LIBRARY_FILE_JOB } from '../queue/queue.constants';
+import {
+  ARTIFACT_GENERATION_QUEUE,
+  DELETE_LIBRARY_OBJECT_JOB,
+  GENERATE_ARTIFACT_JOB,
+  LIBRARY_PARSE_QUEUE,
+  PARSE_LIBRARY_FILE_JOB,
+} from '../queue/queue.constants';
 
 @Injectable()
 export class OutboxRelayService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -16,6 +22,7 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnApplication
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
     @InjectQueue(LIBRARY_PARSE_QUEUE) private readonly queue: Queue,
+    @InjectQueue(ARTIFACT_GENERATION_QUEUE) private readonly artifactQueue: Queue,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -48,6 +55,18 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnApplication
             } else if (event.eventType === 'library.file.deleted') {
               const storageKey = String(event.payloadJson.storageKey || '');
               await this.queue.add(DELETE_LIBRARY_OBJECT_JOB, { storageKey }, { jobId: `delete-${event.id}` });
+            } else if (event.eventType === 'artifact.generation.requested') {
+              const artifactId = String(event.payloadJson.artifactId || '');
+              const jobId = String(event.payloadJson.jobId || '');
+              const version = Number(event.payloadJson.version);
+              if (!artifactId || !jobId || !Number.isSafeInteger(version) || version < 1) {
+                throw new Error('Invalid artifact generation event');
+              }
+              await this.artifactQueue.add(
+                GENERATE_ARTIFACT_JOB,
+                { artifactId, jobId, version },
+                { jobId: `artifact:${artifactId}:v${version}` },
+              );
             } else {
               throw new Error(`Unsupported outbox event ${event.eventType}`);
             }

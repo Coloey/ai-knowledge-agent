@@ -20,6 +20,8 @@ import {
   reduceAgentEventBatch,
   selectOrderedChunks,
   selectOrderedParts,
+  selectAnswerArtifacts,
+  selectThreadArtifacts,
   stopRunLocally,
   type Thread,
 } from '@agent/domain';
@@ -27,6 +29,7 @@ import {
   createSseDecoder,
   decodeAgentEvent,
   type AgentEvent,
+  type ArtifactRef,
 } from '@agent/protocol';
 
 export interface SendMessageInput {
@@ -37,6 +40,10 @@ export interface SendMessageInput {
   timezone_offset: number;
   display_language: string;
   options: Record<string, unknown>;
+}
+
+export interface ChatSendOptions {
+  outputArtifact?: 'document';
 }
 
 export interface SessionDetailInput {
@@ -188,6 +195,14 @@ export class ChatRuntime {
     return selectOrderedChunks(this.state, partId);
   }
 
+  getAnswerArtifacts(answerPartId: string): ArtifactRef[] {
+    return selectAnswerArtifacts(this.state, answerPartId);
+  }
+
+  getThreadArtifacts(threadId = this.state.currentThreadId): ArtifactRef[] {
+    return selectThreadArtifacts(this.state, threadId);
+  }
+
   openThread(threadId: string): void {
     this.publish(openChatThread(this.state, threadId));
   }
@@ -195,6 +210,7 @@ export class ChatRuntime {
   async send(
     message: string,
     threadId = this.state.currentThreadId,
+    sendOptions?: ChatSendOptions,
   ): Promise<void> {
     const text = message.trim();
     if (!text) return;
@@ -228,7 +244,10 @@ export class ChatRuntime {
       message: text,
       timezone_offset: new Date().getTimezoneOffset(),
       display_language: 'zh-CN',
-      options: {},
+      options:
+        sendOptions?.outputArtifact === 'document'
+          ? { output_artifact: 'document' }
+          : {},
     };
 
     try {
@@ -656,7 +675,11 @@ export function useChatRuntime(): ChatRuntime {
 }
 
 export interface ChatRuntimeCommands {
-  send(message: string, threadId?: string): Promise<void>;
+  send(
+    message: string,
+    threadId?: string,
+    options?: ChatSendOptions,
+  ): Promise<void>;
   stop(threadId?: string): void;
   openThread(threadId: string): void;
   loadThreadDetail(sessionId: string): Promise<void>;
@@ -666,8 +689,11 @@ export function useChatCommands(): ChatRuntimeCommands {
   const runtime = useChatRuntime();
   return useMemo(
     () => ({
-      send: (message: string, threadId?: string) =>
-        runtime.send(message, threadId),
+      send: (
+        message: string,
+        threadId?: string,
+        options?: ChatSendOptions,
+      ) => runtime.send(message, threadId, options),
       stop: (threadId?: string) => runtime.stop(threadId),
       openThread: (threadId: string) => runtime.openThread(threadId),
       loadThreadDetail: (sessionId: string) =>
@@ -719,6 +745,24 @@ export function useOrderedChunks(partId: string): Chunk[] {
   const selector = useCallback(
     (state: ChatState) => selectOrderedChunks(state, partId),
     [partId],
+  );
+  return useChatSelector(selector);
+}
+
+export function useAnswerArtifacts(answerPartId: string): ArtifactRef[] {
+  const selector = useCallback(
+    (state: ChatState) => selectAnswerArtifacts(state, answerPartId),
+    [answerPartId],
+  );
+  return useChatSelector(selector);
+}
+
+export function useThreadArtifacts(
+  threadId?: string,
+): ArtifactRef[] {
+  const selector = useCallback(
+    (state: ChatState) => selectThreadArtifacts(state, threadId),
+    [threadId],
   );
   return useChatSelector(selector);
 }

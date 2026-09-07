@@ -1,6 +1,6 @@
 # AI Knowledge Agent 能力扩展技术方案
 
-> 状态：P0 v1.0 已实现，P1-P4 待评审
+> 状态：P0 v1.0 已实现，P3 Artifact 专项方案待评审，P1/P2/P4 待评审
 >
 > 日期：2026-09-03
 >
@@ -639,7 +639,7 @@ interface SendMessageOptions {
 | P0 运行时地基（已完成） | Versioned protocol、ChatRuntime、多 Thread、Part/Chunk、稳定 stop/error | protocol、domain reducer、runtime、SmartBar 解耦、event journal | 已通过实时/历史等价、立即 stop、线程隔离及全仓验证 |
 | P1 会话与知识体验 | History、Detail 分页、Replay、知识源多选、引用抽屉、Library 搜索/重命名 | History page、source picker、citation UI、replay API | 刷新恢复一致；引用能定位文件/页；断流后不重复生成 |
 | P2 Agent 工具 | Tool Registry、Agent Loop、Library tools、通用 Tool Card、Prompt Tools | orchestrator、3 个内建工具、prompt catalog | 工具 use/result 可追踪；超时/取消/失败可恢复；未知工具不阻断答案 |
-| P3 Artifact | 文档/PPT/图片任务、进度、预览、下载、Artifact Center | artifact tables、worker jobs、renderer | 大文件不进 SSE；权限正确；失败可重试；历史可恢复 |
+| P3 Artifact | 先交付 Markdown Report 垂直切片，再扩展 DOCX/PPTX/图片与 Artifact Center | [Artifact 专项方案](/Users/coloey/ai-knowledge-agent/docs/technical-design/artifact-generation-and-delivery.md)、artifact tables、worker jobs、renderer | 大文件不进 SSE；权限正确；失败可重试；历史可恢复 |
 | P4 自动化与集成 | Scheduled Tasks、Web Search、Drive/Calendar 等 | scheduler、integration adapters、run history | 授权隔离、幂等执行、审计与撤销完整 |
 
 不建议并行启动 P2/P3/P4。它们都依赖 P0 的身份、事件、终态和历史语义；先做功能会把协议债务扩散到每个页面。
@@ -782,3 +782,4 @@ question_id / answer_id / event_id / event_type / seq / failure_phase
 - 当前前端状态：[domain store](/Users/coloey/ai-knowledge-agent/packages/domain/src/index.ts)、[SmartBar](/Users/coloey/ai-knowledge-agent/packages/smart-bar/src/index.tsx)、[Web App](/Users/coloey/ai-knowledge-agent/apps/web/src/App.tsx)
 - 当前后端状态：[Sessions controller](/Users/coloey/ai-knowledge-agent/apps/backend/src/sessions/sessions.controller.ts)、[Sessions service](/Users/coloey/ai-knowledge-agent/apps/backend/src/sessions/sessions.service.ts)、[SSE contract](/Users/coloey/ai-knowledge-agent/apps/backend/src/sessions/sse.ts)、[Database schema](/Users/coloey/ai-knowledge-agent/apps/backend/src/database/schema.ts)
 - Notta Brain 逆向调研：[streaming runtime research](/Users/coloey/ai-knowledge-agent/docs/research/notta-brain-streaming-runtime-research.md)、[runtime PRD](/Users/coloey/ai-knowledge-agent/docs/research/notta-brain-streaming-runtime-prd.md)
+- Artifact 专项：[Notta Brain Artifact 源码研究](/Users/coloey/ai-knowledge-agent/docs/research/notta-brain-artifact-runtime-research.md)、[生成/预览/下载技术方案](/Users/coloey/ai-knowledge-agent/docs/technical-design/artifact-generation-and-delivery.md)
