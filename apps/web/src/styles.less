@@ -229,6 +229,10 @@ body {
   align-items: center;
 }
 
+.smartbar-input .ant-input-textarea {
+  flex: 1;
+}
+
 .smartbar-header {
   justify-content: space-between;
 }
@@ -286,6 +290,72 @@ body {
 .assistant-chunks {
   display: grid;
   gap: 8px;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 620px);
+}
+
+.artifact-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #c9d8f3;
+  border-radius: 8px;
+  background: #f7faff;
+}
+
+.artifact-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.artifact-card-header span {
+  display: block;
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.artifact-progress,
+.artifact-actions,
+.artifact-failed {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-actions {
+  grid-template-columns: repeat(2, max-content);
+  align-items: center;
+}
+
+.artifact-failed {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  color: #b42318;
+}
+
+.artifact-error {
+  color: #b42318;
+  border-color: #ffccc7;
+  background: #fff1f0;
+}
+
+.artifact-preview-content {
+  margin: 0;
+  overflow: auto;
+  color: #172033;
+  font:
+    13px/1.65 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
 }
 
 .message-bubble.chunk-thinking,
@@ -385,5 +455,10 @@ body {
   .smartbar-input {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .artifact-actions,
+  .artifact-failed {
+    grid-template-columns: 1fr;
   }
 }

@@ -247,6 +247,9 @@ importers:
 
   packages/smart-bar:
     dependencies:
+      '@agent/api':
+        specifier: workspace:*
+        version: link:../api
       '@agent/chat-runtime':
         specifier: workspace:*
         version: link:../chat-runtime

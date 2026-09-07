@@ -191,6 +191,20 @@ describe('FetchSseTransport', () => {
 });
 
 describe('ChatRuntime', () => {
+  it('passes a document artifact request as per-send options only', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createRuntime(transport);
+    const sending = runtime.send('create a report', 'thread-1', {
+      outputArtifact: 'document',
+    });
+
+    expect(transport.streams[0].input.options).toEqual({
+      output_artifact: 'document',
+    });
+    transport.streams[0].reject(new Error('transport stopped'));
+    await sending;
+  });
+
   it('isolates interleaved streams for two threads and refuses a concurrent same-thread send', async () => {
     const transport = new ControlledTransport();
     const runtime = createRuntime(transport);

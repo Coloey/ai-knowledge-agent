@@ -42,6 +42,10 @@ export interface SendMessageInput {
   options: Record<string, unknown>;
 }
 
+export interface ChatSendOptions {
+  outputArtifact?: 'document';
+}
+
 export interface SessionDetailInput {
   workspace_id: string;
   session_id: string;
@@ -206,6 +210,7 @@ export class ChatRuntime {
   async send(
     message: string,
     threadId = this.state.currentThreadId,
+    sendOptions?: ChatSendOptions,
   ): Promise<void> {
     const text = message.trim();
     if (!text) return;
@@ -239,7 +244,10 @@ export class ChatRuntime {
       message: text,
       timezone_offset: new Date().getTimezoneOffset(),
       display_language: 'zh-CN',
-      options: {},
+      options:
+        sendOptions?.outputArtifact === 'document'
+          ? { output_artifact: 'document' }
+          : {},
     };
 
     try {
@@ -667,7 +675,11 @@ export function useChatRuntime(): ChatRuntime {
 }
 
 export interface ChatRuntimeCommands {
-  send(message: string, threadId?: string): Promise<void>;
+  send(
+    message: string,
+    threadId?: string,
+    options?: ChatSendOptions,
+  ): Promise<void>;
   stop(threadId?: string): void;
   openThread(threadId: string): void;
   loadThreadDetail(sessionId: string): Promise<void>;
@@ -677,8 +689,11 @@ export function useChatCommands(): ChatRuntimeCommands {
   const runtime = useChatRuntime();
   return useMemo(
     () => ({
-      send: (message: string, threadId?: string) =>
-        runtime.send(message, threadId),
+      send: (
+        message: string,
+        threadId?: string,
+        options?: ChatSendOptions,
+      ) => runtime.send(message, threadId, options),
       stop: (threadId?: string) => runtime.stop(threadId),
       openThread: (threadId: string) => runtime.openThread(threadId),
       loadThreadDetail: (sessionId: string) =>
