@@ -41,6 +41,28 @@ describe('SessionsService prepare', () => {
     });
   });
 
+  it('carries the validated document request into the new-run stream context', async () => {
+    const transaction = vi.fn(async (operation: (tx: object) => Promise<unknown>) =>
+      operation({
+        insert: () => ({ values: vi.fn() }),
+      }),
+    );
+    const service = createService({ database: { db: { transaction } } });
+
+    const context = await service.prepare(
+      { id: 'user_1', email: 'user@example.com', name: 'User', avatar: '' },
+      {
+        workspace_id: 'workspace_1',
+        message: 'question',
+        options: { output_artifact: 'document' },
+        timezone_offset: 0,
+        display_language: 'zh-CN',
+      },
+    );
+
+    expect(context.outputArtifact).toBe('document');
+  });
+
   it('loads duplicate request replay from the V2 journal in sequence order', async () => {
     const event = taskStartedEvent();
     const existing = {
@@ -160,6 +182,7 @@ function createService({
   return new SessionsService(
     database as never,
     journal as never,
+    {} as never,
     workspaces as never,
     {} as never,
     {} as never,

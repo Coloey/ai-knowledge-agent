@@ -54,6 +54,7 @@ describe('SessionsService V2 stream', () => {
     expect(persisted.find((event) => event.type === 'result')).toMatchObject({
       content: { final_message_chunk_id: 'message_answer_1', text: answer },
     });
+    expect(persisted.find((event) => event.type === 'result')?.content).not.toHaveProperty('artifacts');
     for (const event of persisted) {
       expect(trace.indexOf(`persist:${event.event_id}`)).toBeLessThan(trace.indexOf(`publish:${event.event_id}`));
     }
@@ -91,6 +92,196 @@ describe('SessionsService V2 stream', () => {
       type: 'task_completed',
       content: { terminal_reason: 'interrupted' },
     });
+  });
+
+  it('requests a document artifact after flushing text and persists its stable ref in result', async () => {
+    const trace: string[] = [];
+    const { journal, persisted } = journalFake(trace);
+    const artifact = {
+      requestFromAnswer: vi.fn(async () => {
+        trace.push('artifact');
+        return {
+          artifact: { id: 'artifact_1', kind: 'document', title: 'question', status: 'queued' },
+          cancel: vi.fn().mockResolvedValue(true),
+        };
+      }),
+    };
+    const { response } = responseWriter(trace);
+    const service = serviceWith({
+      journal,
+      artifact,
+      retrieval: { retrieve: vi.fn().mockResolvedValue([]) },
+      llm: {
+        streamAnswer: async function* () {
+          yield 'answer';
+        },
+      },
+      control: { clear: vi.fn(), isInterrupted: vi.fn().mockResolvedValue(false) },
+    });
+
+    await service.stream(
+      { identity: identity(), question: '  Quarterly\nreport\u0000 ', outputArtifact: 'document' },
+      response,
+      new AbortController(),
+    );
+
+    expect(artifact.requestFromAnswer).toHaveBeenCalledWith({
+      workspaceId: 'workspace_1',
+      sessionId: 'session_1',
+      answerId: 'answer_1',
+      kind: 'document',
+      title: 'Quarterly report',
+    });
+    expect(trace.indexOf('artifact')).toBeGreaterThan(trace.lastIndexOf('persist:event_4'));
+    expect(trace.indexOf('artifact')).toBeLessThan(trace.indexOf('persist:event_5'));
+    expect(persisted.find((event) => event.type === 'result')).toMatchObject({
+      content: {
+        final_message_chunk_id: 'message_answer_1',
+        text: 'answer',
+        artifacts: [{ id: 'artifact_1', kind: 'document', title: 'question', status: 'queued' }],
+      },
+    });
+  });
+
+  it('does not request an artifact for an interrupted run', async () => {
+    const { journal } = journalFake([]);
+    const artifact = { requestFromAnswer: vi.fn() };
+    const { response } = responseWriter([]);
+    const service = serviceWith({
+      journal,
+      artifact,
+      retrieval: { retrieve: vi.fn().mockResolvedValue([]) },
+      llm: {
+        streamAnswer: async function* () {
+          yield 'ignored';
+        },
+      },
+      control: { clear: vi.fn(), isInterrupted: vi.fn().mockResolvedValue(true) },
+    });
+
+    await service.stream(
+      { identity: identity(), question: 'question', outputArtifact: 'document' },
+      response,
+      new AbortController(),
+    );
+
+    expect(artifact.requestFromAnswer).not.toHaveBeenCalled();
+  });
+
+  it('does not request an artifact when interrupted while flushing final text', async () => {
+    let interrupted = false;
+    const { journal, persisted } = journalFake([], (event) => {
+      if (event.type === 'data') interrupted = true;
+    });
+    const artifact = { requestFromAnswer: vi.fn() };
+    const { response } = responseWriter([]);
+    const service = serviceWith({
+      journal,
+      artifact,
+      retrieval: { retrieve: vi.fn().mockResolvedValue([]) },
+      llm: {
+        streamAnswer: async function* () {
+          yield 'answer';
+        },
+      },
+      control: { clear: vi.fn(), isInterrupted: vi.fn(async () => interrupted) },
+    });
+
+    await service.stream(
+      { identity: identity(), question: 'question', outputArtifact: 'document' },
+      response,
+      new AbortController(),
+    );
+
+    expect(artifact.requestFromAnswer).not.toHaveBeenCalled();
+    expect(persisted.some((event) => event.type === 'result')).toBe(false);
+    expect(persisted.at(-1)).toMatchObject({
+      type: 'task_completed',
+      content: { terminal_reason: 'interrupted' },
+    });
+  });
+
+  it('cancels a newly queued artifact when interrupted while its request is in flight', async () => {
+    let interrupted = false;
+    let resolveRequest!: (value: {
+      artifact: { id: string; kind: 'document'; title: string; status: 'queued' };
+      cancel: () => Promise<boolean>;
+    }) => void;
+    const request = new Promise<{
+      artifact: { id: string; kind: 'document'; title: string; status: 'queued' };
+      cancel: () => Promise<boolean>;
+    }>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const cancel = vi.fn().mockResolvedValue(true);
+    const artifact = { requestFromAnswer: vi.fn(() => request) };
+    const { journal, persisted } = journalFake([]);
+    const { response } = responseWriter([]);
+    const service = serviceWith({
+      journal,
+      artifact,
+      retrieval: { retrieve: vi.fn().mockResolvedValue([]) },
+      llm: {
+        streamAnswer: async function* () {
+          yield 'answer';
+        },
+      },
+      control: { clear: vi.fn(), isInterrupted: vi.fn(async () => interrupted) },
+    });
+
+    const streaming = service.stream(
+      { identity: identity(), question: 'question', outputArtifact: 'document' },
+      response,
+      new AbortController(),
+    );
+    await vi.waitFor(() => expect(artifact.requestFromAnswer).toHaveBeenCalledOnce());
+    interrupted = true;
+    resolveRequest({
+      artifact: { id: 'artifact_1', kind: 'document', title: 'question', status: 'queued' },
+      cancel,
+    });
+    await streaming;
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(persisted.some((event) => event.type === 'result' || event.type === 'artifact')).toBe(false);
+    expect(persisted.at(-1)).toMatchObject({
+      type: 'task_completed',
+      content: { terminal_reason: 'interrupted' },
+    });
+  });
+
+  it('fails the run when artifact creation fails before a stable ref exists', async () => {
+    const log = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { journal, persisted, fail } = journalFake([]);
+    const { response } = responseWriter([]);
+    const service = serviceWith({
+      journal,
+      artifact: { requestFromAnswer: vi.fn().mockRejectedValue(new Error('artifact request failed')) },
+      retrieval: { retrieve: vi.fn().mockResolvedValue([]) },
+      llm: {
+        streamAnswer: async function* () {
+          yield 'answer';
+        },
+      },
+      control: { clear: vi.fn(), isInterrupted: vi.fn().mockResolvedValue(false) },
+    });
+
+    await service.stream(
+      { identity: identity(), question: 'question', outputArtifact: 'document' },
+      response,
+      new AbortController(),
+    );
+
+    expect(persisted.slice(-2).map((event) => event.type)).toEqual(['error', 'task_completed']);
+    expect(persisted.some((event) => event.type === 'result')).toBe(false);
+    expect(fail).toHaveBeenCalledWith(identity(), {
+      error_code: 43106,
+      message: 'Generation failed. Please try again.',
+    });
+    expect(log).toHaveBeenCalledWith(
+      'Agent generation failed for run run_1',
+      expect.stringContaining('artifact request failed'),
+    );
   });
 
   it('emits error and task_completed as separate events and marks a failed run terminal', async () => {
@@ -153,11 +344,13 @@ describe('SessionsService V2 stream', () => {
 
 function serviceWith({
   journal,
+  artifact = {},
   retrieval,
   llm,
   control,
 }: {
   journal: object;
+  artifact?: object;
   retrieval: object;
   llm: object;
   control: object;
@@ -165,6 +358,7 @@ function serviceWith({
   return new SessionsService(
     {} as never,
     journal as never,
+    artifact as never,
     {} as never,
     retrieval as never,
     llm as never,
@@ -173,7 +367,7 @@ function serviceWith({
   );
 }
 
-function journalFake(trace: string[]) {
+function journalFake(trace: string[], onAppend?: (event: AgentEvent) => void) {
   const persisted: AgentEvent[] = [];
   const persist = (identityValue: SessionRunIdentity, type: AgentEvent['type'], content: AgentEvent['content']) => {
     const event = {
@@ -194,7 +388,11 @@ function journalFake(trace: string[]) {
     persisted.push(event);
     return event;
   };
-  const append = vi.fn(async (identityValue, type, content) => persist(identityValue, type, content));
+  const append = vi.fn(async (identityValue, type, content) => {
+    const event = persist(identityValue, type, content);
+    onAppend?.(event);
+    return event;
+  });
   const read = vi.fn(async () => persisted);
   const succeed = vi.fn(async (identityValue, content) => ({
     signal: { event: persist(identityValue, 'result', content), appended: true },

@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { and, asc, desc, eq } from 'drizzle-orm';
 
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { ArtifactApplication } from '../artifacts/artifact.application';
 import type { Environment } from '../config/environment';
 import { DatabaseService } from '../database/database.service';
 import { newId } from '../database/id';
@@ -32,6 +33,7 @@ type EventOf<TType extends EventType> = Extract<AgentEvent, { type: TType }>;
 export interface StreamContext {
   identity: SessionRunIdentity;
   question: string;
+  outputArtifact?: 'document';
   replay?: AgentEvent[];
 }
 
@@ -42,6 +44,7 @@ export class SessionsService {
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
     @Inject(SessionEventJournal) private readonly journal: SessionEventJournal,
+    @Inject(ArtifactApplication) private readonly artifacts: ArtifactApplication,
     @Inject(WorkspacesService) private readonly workspaces: WorkspacesService,
     @Inject(RetrievalService) private readonly retrieval: RetrievalService,
     @Inject(LlmService) private readonly llm: LlmService,
@@ -141,6 +144,7 @@ export class SessionsService {
           runId,
         },
         question: input.message,
+        ...(input.options.output_artifact === undefined ? {} : { outputArtifact: input.options.output_artifact }),
       };
     });
   }
@@ -240,9 +244,33 @@ export class SessionsService {
       }
 
       await flushText();
+      if (await interrupted()) {
+        abort.abort();
+        await complete({ status: 'interrupted', terminalReason: 'interrupted', message: 'interrupted' });
+        this.write(response, sseDone());
+        return;
+      }
+      const artifactRequest =
+        context.outputArtifact === undefined
+          ? undefined
+          : await this.artifacts.requestFromAnswer({
+              workspaceId: context.identity.workspaceId,
+              sessionId: context.identity.sessionId,
+              answerId: context.identity.answerId,
+              kind: context.outputArtifact,
+              title: reportTitle(context.question),
+            });
+      if (await interrupted()) {
+        abort.abort();
+        if (artifactRequest) await artifactRequest.cancel();
+        await complete({ status: 'interrupted', terminalReason: 'interrupted', message: 'interrupted' });
+        this.write(response, sseDone());
+        return;
+      }
       const terminal = await this.journal.succeed(context.identity, {
         final_message_chunk_id: messageChunkId,
         text: fullText,
+        ...(artifactRequest === undefined ? {} : { artifacts: [artifactRequest.artifact] }),
       });
       completed = true;
       if (terminal.signal.appended) this.write(response, sseData(terminal.signal.event));
@@ -389,4 +417,13 @@ export class SessionsService {
       // The journal is authoritative; a disconnected SSE consumer can replay later.
     }
   }
+}
+
+function reportTitle(question: string): string {
+  const title = question
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+  return title || 'Generated report';
 }

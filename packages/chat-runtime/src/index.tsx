@@ -20,6 +20,8 @@ import {
   reduceAgentEventBatch,
   selectOrderedChunks,
   selectOrderedParts,
+  selectAnswerArtifacts,
+  selectThreadArtifacts,
   stopRunLocally,
   type Thread,
 } from '@agent/domain';
@@ -27,6 +29,7 @@ import {
   createSseDecoder,
   decodeAgentEvent,
   type AgentEvent,
+  type ArtifactRef,
 } from '@agent/protocol';
 
 export interface SendMessageInput {
@@ -186,6 +189,14 @@ export class ChatRuntime {
 
   getChunks(partId: string): Chunk[] {
     return selectOrderedChunks(this.state, partId);
+  }
+
+  getAnswerArtifacts(answerPartId: string): ArtifactRef[] {
+    return selectAnswerArtifacts(this.state, answerPartId);
+  }
+
+  getThreadArtifacts(threadId = this.state.currentThreadId): ArtifactRef[] {
+    return selectThreadArtifacts(this.state, threadId);
   }
 
   openThread(threadId: string): void {
@@ -719,6 +730,24 @@ export function useOrderedChunks(partId: string): Chunk[] {
   const selector = useCallback(
     (state: ChatState) => selectOrderedChunks(state, partId),
     [partId],
+  );
+  return useChatSelector(selector);
+}
+
+export function useAnswerArtifacts(answerPartId: string): ArtifactRef[] {
+  const selector = useCallback(
+    (state: ChatState) => selectAnswerArtifacts(state, answerPartId),
+    [answerPartId],
+  );
+  return useChatSelector(selector);
+}
+
+export function useThreadArtifacts(
+  threadId?: string,
+): ArtifactRef[] {
+  const selector = useCallback(
+    (state: ChatState) => selectThreadArtifacts(state, threadId),
+    [threadId],
   );
   return useChatSelector(selector);
 }

@@ -20,6 +20,7 @@ import type { UploadProps } from 'antd';
 
 import {
   ApiProvider,
+  ArtifactQueryProvider,
   AuthExpiredError,
   AuthResult,
   LibraryFileDTO,
@@ -56,9 +57,11 @@ export function App() {
       {!auth ? (
         <AuthPanel onAuth={handleAuth} />
       ) : (
-        <AppShell title="AI Knowledge Agent">
-          <WorkspacePanel auth={auth} onLogout={logout} />
-        </AppShell>
+        <ArtifactQueryProvider identityKey={auth.user.uid}>
+          <AppShell title="AI Knowledge Agent">
+            <WorkspacePanel auth={auth} onLogout={logout} />
+          </AppShell>
+        </ArtifactQueryProvider>
       )}
     </ApiProvider>
   );

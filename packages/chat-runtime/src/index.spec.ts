@@ -578,6 +578,9 @@ describe('ChatRuntime', () => {
     expect(historyRuntime.getChunks('answer:answer-run-history')).toEqual(
       liveRuntime.getChunks('answer:answer-run-history'),
     );
+    expect(historyRuntime.getAnswerArtifacts('answer:answer-run-history')).toEqual(
+      liveRuntime.getAnswerArtifacts('answer:answer-run-history'),
+    );
   });
 
   it('restores an interrupted Session Detail with the same stopped semantics as live streaming', async () => {
@@ -891,7 +894,18 @@ function completeEvents(
     runEvent(
       input,
       'result',
-      { final_message_chunk_id: `message-${runId}`, text: answer },
+      {
+        final_message_chunk_id: `message-${runId}`,
+        text: answer,
+        artifacts: [
+          {
+            id: `artifact-${runId}`,
+            kind: 'document',
+            title: 'Report',
+            status: 'queued',
+          },
+        ],
+      },
       sessionId,
       runId,
       6,

@@ -4,6 +4,7 @@ import { LoggerModule } from 'nestjs-pino';
 
 import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
+import { ArtifactWorkerModule } from './artifacts/artifact-worker.module';
 import { LibraryWorkerModule } from './library/library-worker.module';
 import { QueueInfrastructureModule } from './queue/queue.module';
 
@@ -18,6 +19,7 @@ import { QueueInfrastructureModule } from './queue/queue.module';
     LoggerModule.forRoot({ pinoHttp: { level: process.env.LOG_LEVEL || 'info' } }),
     DatabaseModule,
     QueueInfrastructureModule,
+    ArtifactWorkerModule,
     LibraryWorkerModule,
   ],
 })

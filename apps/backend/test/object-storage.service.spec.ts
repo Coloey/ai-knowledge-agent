@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -66,6 +66,26 @@ describe('ObjectStorageService', () => {
     await expect(storage.readBuffer(stored.storageKey)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('keeps local user uploads exclusive when generated artifacts are replaceable', async () => {
+    const directory = await temporaryDirectory();
+    const storage = new ObjectStorageService(config({ LOCAL_STORAGE_DIR: directory }));
+    const input = {
+      workspaceId: 'workspace_1',
+      fileId: 'file_1',
+      filename: 'notes.txt',
+      contentType: 'text/plain',
+    };
+
+    await storage.saveUpload({ ...input, stream: Readable.from([Buffer.from('first')]) });
+
+    await expect(
+      storage.saveUpload({ ...input, stream: Readable.from([Buffer.from('second')]) }),
+    ).rejects.toMatchObject({
+      code: 'EEXIST',
+    });
+    await expect(storage.readBuffer('workspace_1/file_1.txt')).resolves.toEqual(Buffer.from('first'));
+  });
+
   it('rejects oversized uploads and removes the partial local object', async () => {
     const directory = await temporaryDirectory();
     const storage = new ObjectStorageService(config({ LOCAL_STORAGE_DIR: directory, MAX_UPLOAD_BYTES: 4 }));
@@ -130,6 +150,73 @@ describe('ObjectStorageService', () => {
     await expect(storage.delete('../outside.txt')).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('writes generated files under a versioned artifact key and opens a stream without buffering the object', async () => {
+    const directory = await temporaryDirectory();
+    const storage = new ObjectStorageService(config({ LOCAL_STORAGE_DIR: directory, MAX_UPLOAD_BYTES: 9_000_000 }));
+    const body = Buffer.alloc(8 * 1024 * 1024, 'x');
+
+    const stored = await storage.saveGenerated({
+      stream: Readable.from([body]),
+      workspaceId: 'workspace_1',
+      artifactId: 'artifact_1',
+      version: 2,
+      filename: '../../weekly report.md',
+      contentType: 'text/markdown',
+    });
+    const opened = await storage.openStream(stored.storageKey);
+
+    expect(stored).toEqual({
+      storageKey: 'workspace_1/artifacts/artifact_1/v2/weekly-report.md',
+      size: body.length,
+      contentType: 'text/markdown',
+    });
+    expect(opened.body).toBeInstanceOf(Readable);
+    expect(opened.size).toBe(body.length);
+    expect(opened.contentType).toBe('text/markdown');
+    expect((await stat(join(directory, stored.storageKey))).size).toBe(body.length);
+    opened.body.destroy();
+
+    await expect(
+      storage.saveGenerated({
+        stream: Readable.from([Buffer.from('nope')]),
+        workspaceId: '../outside',
+        artifactId: 'artifact_1',
+        version: 1,
+        filename: 'report.md',
+        contentType: 'text/markdown',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('atomically replaces a generated file for a same-version worker retry and cleans up a failed replacement', async () => {
+    const directory = await temporaryDirectory();
+    const storage = new ObjectStorageService(config({ LOCAL_STORAGE_DIR: directory }));
+    const input = {
+      workspaceId: 'workspace_1',
+      artifactId: 'artifact_1',
+      version: 1,
+      filename: 'report.md',
+      contentType: 'text/markdown' as const,
+    };
+
+    await storage.saveGenerated({ ...input, stream: Readable.from([Buffer.from('before restart')]) });
+    const retried = await storage.saveGenerated({ ...input, stream: Readable.from([Buffer.from('after restart')]) });
+
+    expect(await storage.readBuffer(retried.storageKey)).toEqual(Buffer.from('after restart'));
+
+    const interrupted = new Readable({
+      read() {
+        this.push(Buffer.from('partial replacement'));
+        this.destroy(new Error('generated write interrupted'));
+      },
+    });
+    await expect(storage.saveGenerated({ ...input, stream: interrupted })).rejects.toThrow(
+      'generated write interrupted',
+    );
+    expect(await storage.readBuffer(retried.storageKey)).toEqual(Buffer.from('after restart'));
+    await expect(readdir(join(directory, 'workspace_1/artifacts/artifact_1/v1'))).resolves.toEqual(['report.md']);
+  });
+
   it('uses the configured S3 bucket for upload, read, delete, and health checks', async () => {
     const storage = new ObjectStorageService(
       config({ STORAGE_BACKEND: 's3', S3_BUCKET: 'knowledge-files', MAX_UPLOAD_BYTES: 16 }),
@@ -165,6 +252,34 @@ describe('ObjectStorageService', () => {
       'DeleteObjectCommand',
       'HeadBucketCommand',
     ]);
+  });
+
+  it('uses the generated artifact key and returns the S3 response body as a stream', async () => {
+    const storage = new ObjectStorageService(config({ STORAGE_BACKEND: 's3', S3_BUCKET: 'knowledge-files' }));
+    const responseBody = Readable.from([Buffer.from('generated')]);
+    const send = vi.fn().mockResolvedValue({ Body: responseBody, ContentLength: 9, ContentType: 'text/markdown' });
+    (storage as unknown as { s3Client: { send: typeof send } }).s3Client = { send };
+
+    await storage.saveGenerated({
+      stream: Readable.from([Buffer.from('generated')]),
+      workspaceId: 'workspace_1',
+      artifactId: 'artifact_1',
+      version: 1,
+      filename: 'report.md',
+      contentType: 'text/markdown',
+    });
+    const opened = await storage.openStream('workspace_1/artifacts/artifact_1/v1/report.md');
+
+    expect(uploadOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          Bucket: 'knowledge-files',
+          Key: 'workspace_1/artifacts/artifact_1/v1/report.md',
+          ContentType: 'text/markdown',
+        }),
+      }),
+    );
+    expect(opened).toMatchObject({ body: responseBody, size: 9, contentType: 'text/markdown' });
   });
 
   it('enforces the upload limit while streaming to S3', async () => {
