@@ -121,6 +121,21 @@ describe('FetchSseTransport', () => {
       'Unavailable',
     ],
     [
+      new Response(
+        JSON.stringify({
+          code: 500,
+          msg: 'Internal server error',
+          data: null,
+        }),
+        {
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+      'Internal server error',
+    ],
+    [
       new Response('not sse', {
         status: 200,
         headers: { 'Content-Type': 'application/json' },

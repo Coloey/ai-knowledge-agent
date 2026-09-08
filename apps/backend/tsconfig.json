@@ -17,7 +17,7 @@
     "noEmit": false,
     "types": ["node"],
     "paths": {
-      "@agent/protocol": ["packages/protocol/dist/index.d.ts"]
+      "@agent/protocol": ["packages/protocol/dist/index"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "drizzle.config.ts"],

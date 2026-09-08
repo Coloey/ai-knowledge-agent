@@ -74,7 +74,7 @@ export class FetchSseTransport implements ChatTransport {
     );
     if (!response.ok) {
       throw new Error(
-        `SSE request failed: ${response.status} ${response.statusText || 'Unknown error'}`,
+        await describeSseHttpError(response),
       );
     }
     const contentType = response.headers.get('Content-Type') || '';
@@ -127,6 +127,54 @@ export class FetchSseTransport implements ChatTransport {
   ): Promise<void> {
     await this.api.post('/notta-brain/session/interrupt', input, signal);
   }
+}
+
+async function describeSseHttpError(response: Response): Promise<string> {
+  const status = `${response.status} ${response.statusText || 'Unknown error'}`;
+  const bodyMessage = await readResponseErrorMessage(response);
+  return bodyMessage
+    ? `SSE request failed: ${status}: ${bodyMessage}`
+    : `SSE request failed: ${status}`;
+}
+
+async function readResponseErrorMessage(
+  response: Response,
+): Promise<string | undefined> {
+  let text = '';
+  try {
+    text = await response.text();
+  } catch {
+    return undefined;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    const payload = JSON.parse(trimmed) as {
+      msg?: unknown;
+      message?: unknown;
+      data?: unknown;
+    };
+    if (typeof payload.msg === 'string' && payload.msg.trim()) {
+      return payload.msg.trim();
+    }
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message.trim();
+    }
+    if (payload.data && typeof payload.data === 'object') {
+      const errors = (payload.data as { errors?: unknown }).errors;
+      if (
+        Array.isArray(errors) &&
+        errors.every((item) => typeof item === 'string')
+      ) {
+        return errors.join('; ');
+      }
+    }
+  } catch {
+    return trimmed.slice(0, 500);
+  }
+
+  return trimmed.slice(0, 500);
 }
 
 interface ActiveGeneration {
