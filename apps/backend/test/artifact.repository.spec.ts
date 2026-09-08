@@ -163,6 +163,90 @@ describe('ArtifactRepository requestFromAnswer', () => {
   });
 });
 
+describe.each([
+  {
+    name: 'markProcessing',
+    run: (repository: ArtifactRepository) => repository.markProcessing('artifact_1', 'artifact_job_1', 1),
+    expectedArtifact: { status: 'processing' },
+    expectedJob: { status: 'processing', progress: 10 },
+  },
+  {
+    name: 'completeGeneration',
+    run: (repository: ArtifactRepository) =>
+      repository.completeGeneration('artifact_1', 'artifact_job_1', 1, {
+        storageKey: 'workspace_1/artifacts/artifact_1/v1/report.md',
+        size: 42,
+        mimeType: 'text/markdown',
+      }),
+    expectedArtifact: {
+      status: 'completed',
+      storageKey: 'workspace_1/artifacts/artifact_1/v1/report.md',
+      size: 42,
+      mimeType: 'text/markdown',
+    },
+    expectedJob: { status: 'completed', progress: 100 },
+  },
+  {
+    name: 'failGeneration',
+    run: (repository: ArtifactRepository) =>
+      repository.failGeneration(
+        'artifact_1',
+        'artifact_job_1',
+        1,
+        'ARTIFACT_GENERATION_FAILED',
+        'Artifact generation failed',
+      ),
+    expectedArtifact: {
+      status: 'failed',
+      errorCode: 'ARTIFACT_GENERATION_FAILED',
+      errorMessage: 'Artifact generation failed',
+    },
+    expectedJob: {
+      status: 'failed',
+      errorCode: 'ARTIFACT_GENERATION_FAILED',
+      errorMessage: 'Artifact generation failed',
+    },
+  },
+] as const)('ArtifactRepository $name transition', ({ run, expectedArtifact, expectedJob }) => {
+  it('commits the Artifact and matching current Job together', async () => {
+    const database = transitionDatabase();
+    const repository = new ArtifactRepository(database as never);
+
+    await expect(run(repository)).resolves.toBe(true);
+
+    expect(database.artifact).toMatchObject(expectedArtifact);
+    expect(database.job).toMatchObject(expectedJob);
+    expect(database.rolledBack).toBe(false);
+  });
+
+  it('rolls back an Artifact match when the Job is missing, mismatched, or no longer current', async () => {
+    const database = transitionDatabase({ jobMatches: false });
+    const beforeArtifact = { ...database.artifact };
+    const beforeJob = { ...database.job };
+    const repository = new ArtifactRepository(database as never);
+
+    await expect(run(repository)).resolves.toBe(false);
+
+    expect(database.artifact).toEqual(beforeArtifact);
+    expect(database.job).toEqual(beforeJob);
+    expect(database.rolledBack).toBe(true);
+  });
+
+  it('leaves a stale Artifact and its Job unchanged', async () => {
+    const database = transitionDatabase({ artifactMatches: false });
+    const beforeArtifact = { ...database.artifact };
+    const beforeJob = { ...database.job };
+    const repository = new ArtifactRepository(database as never);
+
+    await expect(run(repository)).resolves.toBe(false);
+
+    expect(database.artifact).toEqual(beforeArtifact);
+    expect(database.job).toEqual(beforeJob);
+    expect(database.jobUpdateAttempts).toBe(0);
+    expect(database.rolledBack).toBe(true);
+  });
+});
+
 function detailDatabase(row: Record<string, unknown>) {
   return {
     db: {
@@ -344,5 +428,83 @@ function retryDatabase() {
     },
     artifact,
     inserted,
+  };
+}
+
+function transitionDatabase({
+  artifactMatches = true,
+  jobMatches = true,
+}: {
+  artifactMatches?: boolean;
+  jobMatches?: boolean;
+} = {}) {
+  const artifact: Record<string, unknown> = {
+    id: 'artifact_1',
+    version: 1,
+    status: 'queued',
+    storageKey: null,
+    size: null,
+    mimeType: null,
+    errorCode: null,
+    errorMessage: '',
+  };
+  const job: Record<string, unknown> = {
+    id: 'artifact_job_1',
+    artifactId: 'artifact_1',
+    version: 1,
+    status: 'pending',
+    progress: 0,
+    errorCode: null,
+    errorMessage: '',
+  };
+  let rolledBack = false;
+  let jobUpdateAttempts = 0;
+
+  return {
+    db: {
+      transaction: async <T>(operation: (transaction: object) => Promise<T>): Promise<T> => {
+        const stagedArtifact = { ...artifact };
+        const stagedJob = { ...job };
+        const tx = {
+          update: (table: object) => ({
+            set: (values: Record<string, unknown>) => ({
+              where: () => ({
+                returning: async () => {
+                  if (table === artifacts) {
+                    if (!artifactMatches) return [];
+                    Object.assign(stagedArtifact, values);
+                    return [{ id: artifact.id }];
+                  }
+                  if (table === artifactJobs) {
+                    jobUpdateAttempts += 1;
+                    if (!jobMatches) return [];
+                    Object.assign(stagedJob, values);
+                    return [{ id: job.id }];
+                  }
+                  return [];
+                },
+              }),
+            }),
+          }),
+        };
+        try {
+          const result = await operation(tx);
+          Object.assign(artifact, stagedArtifact);
+          Object.assign(job, stagedJob);
+          return result;
+        } catch (error) {
+          rolledBack = true;
+          throw error;
+        }
+      },
+    },
+    artifact,
+    job,
+    get rolledBack() {
+      return rolledBack;
+    },
+    get jobUpdateAttempts() {
+      return jobUpdateAttempts;
+    },
   };
 }
