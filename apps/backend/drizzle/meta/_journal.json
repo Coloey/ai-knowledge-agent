@@ -22,6 +22,13 @@
       "when": 1788434613379,
       "tag": "0002_overconfident_betty_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788771072178,
+      "tag": "0003_naive_the_twelve",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { LoggerModule } from 'nestjs-pino';
 
 import { AuthModule } from './auth/auth.module';
+import { ArtifactApiModule } from './artifacts/artifact-api.module';
 import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
@@ -40,6 +41,7 @@ import { WorkspacesModule } from './workspaces/workspaces.module';
     QueueInfrastructureModule,
     ControlRedisModule,
     AuthModule,
+    ArtifactApiModule,
     WorkspacesModule,
     LibraryApiModule,
     SessionsModule,

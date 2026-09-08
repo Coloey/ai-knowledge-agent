@@ -45,13 +45,32 @@ describe('decodeAgentEvent', () => {
           ],
         },
       ],
-      ['artifact', { artifacts: [{ id: 'artifact_1', name: 'report.md' }] }],
+      [
+        'artifact',
+        {
+          artifacts: [
+            {
+              id: 'artifact_1',
+              kind: 'document',
+              title: 'Report',
+              status: 'queued',
+            },
+          ],
+        },
+      ],
       [
         'result',
         {
           final_message_chunk_id: 'message_1',
           text: 'final answer',
-          artifacts: [{ id: 'artifact_1' }],
+          artifacts: [
+            {
+              id: 'artifact_1',
+              kind: 'document',
+              title: 'Report',
+              status: 'queued',
+            },
+          ],
         },
       ],
       ['error', { error_code: 43106, message: 'Generation failed' }],
@@ -155,6 +174,21 @@ describe('decodeAgentEvent', () => {
     ],
   ])('rejects %s', (_label, raw) => {
     expect(() => decodeAgentEvent(raw)).toThrow();
+  });
+
+  it.each([
+    ['missing id', { kind: 'document', title: 'Report', status: 'queued' }],
+    ['empty title', { id: 'artifact_1', kind: 'document', title: '', status: 'queued' }],
+    ['unknown kind', { id: 'artifact_1', kind: 'pdf', title: 'Report', status: 'queued' }],
+    ['unknown status', { id: 'artifact_1', kind: 'document', title: 'Report', status: 'pending' }],
+    ['legacy name', { id: 'artifact_1', name: 'report.md' }],
+    ['extra field', { id: 'artifact_1', kind: 'document', title: 'Report', status: 'queued', storage_key: 'private/key' }],
+  ])('strictly rejects artifact refs with %s', (_label, artifact) => {
+    expect(() =>
+      decodeAgentEvent(
+        JSON.stringify(event('artifact', { artifacts: [artifact] })),
+      ),
+    ).toThrow();
   });
 });
 

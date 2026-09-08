@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
+  check,
   index,
   integer,
   jsonb,
@@ -235,6 +236,65 @@ export const jobs = pgTable(
     index('ix_jobs_workspace_id').on(table.workspaceId),
     index('ix_jobs_status').on(table.status),
     index('ix_jobs_type').on(table.type),
+  ],
+);
+
+export const artifacts = pgTable(
+  'artifacts',
+  {
+    id: varchar('id', { length: 64 }).primaryKey(),
+    workspaceId: varchar('workspace_id', { length: 64 })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    sessionId: varchar('session_id', { length: 64 })
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: 'cascade' }),
+    answerId: varchar('answer_id', { length: 64 })
+      .notNull()
+      .references(() => chatAnswers.id, { onDelete: 'cascade' }),
+    kind: varchar('kind', { length: 32 }).notNull(),
+    title: varchar('title', { length: 255 }).notNull(),
+    status: varchar('status', { length: 32 }).default('queued').notNull(),
+    mimeType: varchar('mime_type', { length: 128 }),
+    size: bigint('size', { mode: 'number' }),
+    storageKey: varchar('storage_key', { length: 1000 }),
+    version: integer('version').default(1).notNull(),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message').default('').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('uq_artifacts_answer_kind_version').on(table.answerId, table.kind, table.version),
+    index('ix_artifacts_workspace_id').on(table.workspaceId),
+    index('ix_artifacts_session_id').on(table.sessionId),
+    check(
+      'ck_artifacts_completed_metadata',
+      sql`${table.status} <> 'completed' or (${table.storageKey} is not null and ${table.mimeType} is not null and ${table.size} is not null)`,
+    ),
+  ],
+);
+
+export const artifactJobs = pgTable(
+  'artifact_jobs',
+  {
+    id: varchar('id', { length: 64 }).primaryKey(),
+    artifactId: varchar('artifact_id', { length: 64 })
+      .notNull()
+      .references(() => artifacts.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    status: varchar('status', { length: 32 }).default('pending').notNull(),
+    progress: integer('progress').default(0).notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message').default('').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('uq_artifact_jobs_artifact_version').on(table.artifactId, table.version),
+    index('ix_artifact_jobs_status').on(table.status),
+    check('ck_artifact_jobs_progress_range', sql`${table.progress} between 0 and 100`),
   ],
 );
 

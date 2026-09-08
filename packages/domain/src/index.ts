@@ -1,6 +1,6 @@
 import type {
   AgentEvent,
-  Artifact,
+  ArtifactRef,
   Citation,
   JsonValue,
 } from '@agent/protocol';
@@ -20,6 +20,7 @@ export interface AssistantAnswerPart {
   kind: 'assistant_answer';
   answerId: string;
   chunkIds: string[];
+  artifactIds: string[];
   status: ChunkStatus;
 }
 export interface SystemNoticePart {
@@ -82,7 +83,7 @@ export interface ChatState {
   threads: Record<string, Thread>;
   parts: Record<string, NormalizedPart>;
   chunks: Record<string, Chunk>;
-  artifacts: Record<string, Artifact>;
+  artifacts: Record<string, ArtifactRef>;
   diagnostics: Diagnostic[];
   processedEventIds: Record<string, true>;
   lastSeqByRun: Record<string, number>;
@@ -251,7 +252,6 @@ export function reduceAgentEvent(
         thread,
         event.content.artifacts ||
           (event.content.artifact ? [event.content.artifact] : []),
-        event.event_id,
       );
     case 'result':
       return finalizeResult(next, thread, event);
@@ -285,6 +285,30 @@ export function selectOrderedChunks(state: ChatState, partId: string): Chunk[] {
   return part?.kind === 'assistant_answer'
     ? part.chunkIds.flatMap((id) =>
         state.chunks[id] ? [state.chunks[id]] : [],
+      )
+    : [];
+}
+
+export function selectAnswerArtifacts(
+  state: ChatState,
+  answerPartId: string,
+): ArtifactRef[] {
+  const part = state.parts[answerPartId];
+  return part?.kind === 'assistant_answer'
+    ? part.artifactIds.flatMap((id) =>
+        state.artifacts[id] ? [state.artifacts[id]] : [],
+      )
+    : [];
+}
+
+export function selectThreadArtifacts(
+  state: ChatState,
+  threadId = state.currentThreadId,
+): ArtifactRef[] {
+  const thread = state.threads[threadId];
+  return thread
+    ? thread.artifactIds.flatMap((id) =>
+        state.artifacts[id] ? [state.artifacts[id]] : [],
       )
     : [];
 }
@@ -436,6 +460,7 @@ function ensureAnswer(
     kind: 'assistant_answer',
     answerId,
     chunkIds: [],
+    artifactIds: [],
     status: 'streaming',
   };
   return {
@@ -571,17 +596,21 @@ function addCitations(
 function addArtifacts(
   state: ChatState,
   thread: Thread,
-  artifacts: Artifact[],
-  eventId: string,
+  artifacts: ArtifactRef[],
 ): ChatState {
-  const entries = artifacts.map(
-    (artifact, index) =>
-      [artifact.id || `artifact:${eventId}:${index}`, artifact] as const,
-  );
+  const answer = requireAnswer(state, thread);
+  const entries = artifacts.map((artifact) => [artifact.id, artifact] as const);
   const ids = entries.map(([id]) => id);
   return {
     ...state,
     artifacts: { ...state.artifacts, ...Object.fromEntries(entries) },
+    parts: {
+      ...state.parts,
+      [answer.id]: {
+        ...answer,
+        artifactIds: [...new Set([...answer.artifactIds, ...ids])],
+      },
+    },
     threads: {
       ...state.threads,
       [thread.id]: {
@@ -612,7 +641,6 @@ function finalizeResult(
       next,
       requireThread(next, thread.id),
       event.content.artifacts,
-      event.event_id,
     );
   return updateActiveAnswer(
     next,

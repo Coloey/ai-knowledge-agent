@@ -1,4 +1,22 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import type { ArtifactDetail } from '@agent/protocol';
+import {
+  QueryClient,
+  QueryClientProvider,
+  mutationOptions,
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+
+export type { ArtifactDetail } from '@agent/protocol';
 
 export interface ApiClientOptions {
   baseURL: string;
@@ -80,10 +98,11 @@ export class ApiClient {
     return payload.data;
   }
 
-  async get<T>(path: string): Promise<T> {
+  async get<T>(path: string, signal?: AbortSignal): Promise<T> {
     const response = await fetch(`${this.options.baseURL}${path}`, {
       method: 'GET',
       headers: this.headers(),
+      signal,
     });
     const payload = (await response.json()) as ApiResponse<T>;
     if (response.status === 401) {
@@ -93,6 +112,24 @@ export class ApiClient {
       throw new Error(extractErrorMessage(payload, response.statusText));
     }
     return payload.data;
+  }
+
+  async getBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+    const response = await fetch(`${this.options.baseURL}${path}`, {
+      method: 'GET',
+      headers: this.authHeaders(),
+      signal,
+    });
+    if (!response.ok) {
+      const payload = await readErrorPayload(response);
+      if (response.status === 401) {
+        throw new AuthExpiredError(
+          extractErrorMessage(payload, 'Unauthorized'),
+        );
+      }
+      throw new Error(extractErrorMessage(payload, response.statusText));
+    }
+    return response.blob();
   }
 
   async upload<T>(path: string, formData: FormData): Promise<T> {
@@ -130,10 +167,24 @@ export class ApiClient {
   private headers(): HeadersInit {
     return {
       'Content-Type': 'application/json',
-      ...(this.options.token
-        ? { Authorization: `Bearer ${this.options.token}` }
-        : {}),
+      ...this.authHeaders(),
     };
+  }
+
+  private authHeaders(): HeadersInit {
+    return this.options.token
+      ? { Authorization: `Bearer ${this.options.token}` }
+      : {};
+  }
+}
+
+async function readErrorPayload(
+  response: Response,
+): Promise<ApiResponse<unknown>> {
+  try {
+    return (await response.json()) as ApiResponse<unknown>;
+  } catch {
+    return { code: response.status, data: null, msg: '' };
   }
 }
 
@@ -172,4 +223,95 @@ export function useApiClient(): ApiClient {
     throw new Error('ApiProvider is missing');
   }
   return client;
+}
+
+export const artifactDetailQueryKey = (artifactId: string) =>
+  ['artifact', artifactId] as const;
+
+export function artifactRefetchInterval(
+  detail: ArtifactDetail | undefined,
+): 1500 | false {
+  return detail?.status === 'queued' || detail?.status === 'processing'
+    ? 1_500
+    : false;
+}
+
+export function artifactDetailQueryOptions(
+  client: ApiClient,
+  artifactId: string,
+) {
+  return queryOptions({
+    queryKey: artifactDetailQueryKey(artifactId),
+    queryFn: ({ signal }) =>
+      client.get<ArtifactDetail>(
+        `/artifacts/${encodeURIComponent(artifactId)}`,
+        signal,
+      ),
+    enabled: Boolean(artifactId),
+    refetchInterval: (query) => artifactRefetchInterval(query.state.data),
+  });
+}
+
+export function artifactRetryMutationOptions(
+  client: ApiClient,
+  queryClient: QueryClient,
+  artifactId: string,
+) {
+  return mutationOptions({
+    mutationKey: [...artifactDetailQueryKey(artifactId), 'retry'] as const,
+    mutationFn: () =>
+      client.post<ArtifactDetail>(
+        `/artifacts/${encodeURIComponent(artifactId)}/retry`,
+        {},
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: artifactDetailQueryKey(artifactId),
+        exact: true,
+      }),
+  });
+}
+
+export function useArtifactDetail(artifactId: string) {
+  const client = useApiClient();
+  return useQuery(artifactDetailQueryOptions(client, artifactId));
+}
+
+export function useRetryArtifact(artifactId: string) {
+  const client = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation(
+    artifactRetryMutationOptions(client, queryClient, artifactId),
+  );
+}
+
+export function createArtifactQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+export function ArtifactQueryProvider(
+  props: React.PropsWithChildren<{ identityKey: string }>,
+) {
+  return (
+    <ArtifactQueryClientBoundary key={props.identityKey}>
+      {props.children}
+    </ArtifactQueryClientBoundary>
+  );
+}
+
+function ArtifactQueryClientBoundary(props: React.PropsWithChildren) {
+  const [queryClient] = useState(createArtifactQueryClient);
+  useEffect(() => {
+    return () => queryClient.clear();
+  }, [queryClient]);
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
 }

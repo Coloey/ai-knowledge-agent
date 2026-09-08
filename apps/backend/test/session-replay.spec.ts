@@ -24,15 +24,17 @@ describe('SessionsService replay', () => {
   it('replays complete V2 envelopes in journal order without starting a second generation', async () => {
     const llm = { streamAnswer: vi.fn() };
     const { response, writes, end } = responseWriter();
-    const service = serviceWith({ llm });
+    const artifacts = { requestFromAnswer: vi.fn() };
+    const service = serviceWith({ llm, artifacts });
 
     await service.stream(
-      { identity: identity(), question: 'hello', replay: [replayEvent] },
+      { identity: identity(), question: 'hello', outputArtifact: 'document', replay: [replayEvent] },
       response,
       new AbortController(),
     );
 
     expect(llm.streamAnswer).not.toHaveBeenCalled();
+    expect(artifacts.requestFromAnswer).not.toHaveBeenCalled();
     expect(decodeAgentEvent(writes[0].split('\ndata: ')[1].trim())).toEqual(replayEvent);
     expect(writes).toContain('event: done\ndata: {"done":true}\n\n');
     expect(end).toHaveBeenCalledOnce();
@@ -51,10 +53,17 @@ describe('SessionsService replay', () => {
   });
 });
 
-function serviceWith({ llm }: { llm: { streamAnswer: ReturnType<typeof vi.fn> } }): SessionsService {
+function serviceWith({
+  llm,
+  artifacts = {},
+}: {
+  llm: { streamAnswer: ReturnType<typeof vi.fn> };
+  artifacts?: object;
+}): SessionsService {
   return new SessionsService(
     {} as never,
     { read: vi.fn() } as never,
+    artifacts as never,
     {} as never,
     {} as never,
     llm as never,
