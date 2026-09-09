@@ -12,6 +12,7 @@
     "@agent/api": "workspace:*",
     "@agent/domain": "workspace:*",
     "@agent/protocol": "workspace:*",
+    "@microsoft/fetch-event-source": "^2.0.1",
     "react": "^18.3.1"
   },
   "devDependencies": {

@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import type { FetchEventSourceInit } from '@microsoft/fetch-event-source';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { fetchEventSourceMock } = vi.hoisted(() => ({
+  fetchEventSourceMock: vi.fn(),
+}));
+
+vi.mock('@microsoft/fetch-event-source', () => ({
+  fetchEventSource: fetchEventSourceMock,
+}));
 
 import type { AgentEvent } from '@agent/protocol';
 import {
@@ -46,34 +55,52 @@ class ControlledTransport implements ChatTransport {
   }
 }
 
+function eventSourceOptions(): FetchEventSourceInit {
+  return fetchEventSourceMock.mock.calls[0][1] as FetchEventSourceInit;
+}
+
+function sseResponse(): Response {
+  return new Response('', {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+  });
+}
+
 describe('FetchSseTransport', () => {
-  it('decodes chunk-split UTF-8 SSE, ignores done, and sends the existing endpoint payload', async () => {
+  beforeEach(() => {
+    fetchEventSourceMock.mockReset();
+  });
+
+  it('decodes events, stops on done, and sends the existing endpoint payload', async () => {
     const received: AgentEvent[] = [];
     const payload = event(
       'data',
       { chunk_id: 'message-1', text: '你好' },
       { seq: 1 },
     );
-    const bytes = new TextEncoder().encode(
-      `data: ${JSON.stringify(payload)}\n\nevent: done\ndata: {"done":true}\n\n`,
-    );
-    const split = bytes.indexOf(228) + 1;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(bytes.slice(0, split));
-        controller.enqueue(bytes.slice(split));
-        controller.close();
-      },
-    });
+    const response = sseResponse();
     const api = {
-      stream: vi.fn().mockResolvedValue(
-        new Response(stream, {
-          status: 200,
-          headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
-        }),
-      ),
+      stream: vi.fn().mockResolvedValue(response),
       post: vi.fn(),
     };
+    const internalSignal = new AbortController().signal;
+    fetchEventSourceMock.mockImplementationOnce(
+      async (_input: RequestInfo, options: FetchEventSourceInit) => {
+        await options.onopen?.(
+          await options.fetch!('/ignored', { signal: internalSignal }),
+        );
+        options.onmessage?.({
+          id: 'event-1',
+          event: '',
+          data: JSON.stringify(payload),
+        });
+        options.onmessage?.({
+          id: 'done-1',
+          event: 'done',
+          data: '{"done":true}',
+        });
+      },
+    );
 
     await new FetchSseTransport(api).stream(
       sendInput(),
@@ -87,32 +114,56 @@ describe('FetchSseTransport', () => {
       sendInput(),
       expect.any(AbortSignal),
     );
+    expect(fetchEventSourceMock).toHaveBeenCalledWith(
+      '/notta-brain/session/send-message',
+      expect.objectContaining({
+        method: 'POST',
+        openWhenHidden: true,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(api.stream.mock.calls[0][2]).toBe(internalSignal);
+    expect(eventSourceOptions().signal?.aborted).toBe(true);
   });
 
-  it('finishes and cancels the body when done arrives without HTTP EOF', async () => {
-    let cancelled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode('event: done\ndata: {"done":true}\n\n'),
-        );
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
-    const transport = new FetchSseTransport({
-      stream: vi.fn().mockResolvedValue(
-        new Response(body, {
-          headers: { 'Content-Type': 'text/event-stream' },
+  it('forwards caller cancellation to fetchEventSource', async () => {
+    const caller = new AbortController();
+    let resolveStream: (() => void) | undefined;
+    fetchEventSourceMock.mockImplementationOnce(
+      (_input: RequestInfo, options: FetchEventSourceInit) =>
+        new Promise<void>((resolve) => {
+          resolveStream = resolve;
+          options.signal?.addEventListener('abort', () => resolve(), {
+            once: true,
+          });
         }),
-      ),
+    );
+    const transport = new FetchSseTransport({
+      stream: vi.fn(),
       post: vi.fn(),
     });
 
-    await transport.stream(sendInput(), new AbortController().signal, vi.fn());
+    const streaming = transport.stream(sendInput(), caller.signal, vi.fn());
+    caller.abort();
+    await streaming;
 
-    expect(cancelled).toBe(true);
+    expect(eventSourceOptions().signal?.aborted).toBe(true);
+    expect(resolveStream).toBeTypeOf('function');
+  });
+
+  it('does not open a stream for an already-aborted request', async () => {
+    const caller = new AbortController();
+    const api = { stream: vi.fn(), post: vi.fn() };
+    caller.abort();
+
+    await new FetchSseTransport(api).stream(
+      sendInput(),
+      caller.signal,
+      vi.fn(),
+    );
+
+    expect(fetchEventSourceMock).not.toHaveBeenCalled();
+    expect(api.stream).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -138,8 +189,13 @@ describe('FetchSseTransport', () => {
       'body is empty',
     ],
   ])('rejects invalid SSE responses', async (response, expected) => {
+    fetchEventSourceMock.mockImplementationOnce(
+      async (_input: RequestInfo, options: FetchEventSourceInit) => {
+        await options.onopen?.(response as Response);
+      },
+    );
     const transport = new FetchSseTransport({
-      stream: vi.fn().mockResolvedValue(response),
+      stream: vi.fn(),
       post: vi.fn(),
     });
     await expect(
@@ -147,46 +203,40 @@ describe('FetchSseTransport', () => {
     ).rejects.toThrow(expected);
   });
 
-  it('surfaces malformed V2 events and transport read failures', async () => {
-    let malformedCancelled = false;
-    const malformedBody = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode('data: {"schema_version":1}\n\n'),
-        );
+  it('surfaces malformed V2 events', async () => {
+    fetchEventSourceMock.mockImplementationOnce(
+      async (_input: RequestInfo, options: FetchEventSourceInit) => {
+        options.onmessage?.({
+          id: '',
+          event: '',
+          data: '{"schema_version":1}',
+        });
       },
-      cancel() {
-        malformedCancelled = true;
-      },
-    });
-    const malformed = new Response(malformedBody, {
-      headers: { 'Content-Type': 'text/event-stream' },
-    });
+    );
     const transport = new FetchSseTransport({
-      stream: vi.fn().mockResolvedValue(malformed),
+      stream: vi.fn(),
       post: vi.fn(),
     });
     await expect(
       transport.stream(sendInput(), new AbortController().signal, vi.fn()),
     ).rejects.toThrow('Unsupported agent event schema version');
-    expect(malformedCancelled).toBe(true);
+  });
 
-    const brokenBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        controller.error(new Error('read failed'));
+  it('makes fetchEventSource errors fatal instead of retrying the POST', async () => {
+    fetchEventSourceMock.mockImplementationOnce(
+      async (_input: RequestInfo, options: FetchEventSourceInit) => {
+        options.onerror?.(new Error('read failed'));
       },
-    });
-    const broken = new FetchSseTransport({
-      stream: vi.fn().mockResolvedValue(
-        new Response(brokenBody, {
-          headers: { 'Content-Type': 'text/event-stream' },
-        }),
-      ),
+    );
+    const transport = new FetchSseTransport({
+      stream: vi.fn(),
       post: vi.fn(),
     });
+
     await expect(
-      broken.stream(sendInput(), new AbortController().signal, vi.fn()),
+      transport.stream(sendInput(), new AbortController().signal, vi.fn()),
     ).rejects.toThrow('read failed');
+    expect(fetchEventSourceMock).toHaveBeenCalledTimes(1);
   });
 });
 
