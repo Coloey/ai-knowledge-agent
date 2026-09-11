@@ -6,6 +6,7 @@ import React, {
   useRef,
   useSyncExternalStore,
 } from 'react';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 
 import { useApiClient } from '@agent/api';
 import {
@@ -26,7 +27,6 @@ import {
   type Thread,
 } from '@agent/domain';
 import {
-  createSseDecoder,
   decodeAgentEvent,
   type AgentEvent,
   type ArtifactRef,
@@ -74,50 +74,47 @@ export class FetchSseTransport implements ChatTransport {
     signal: AbortSignal,
     onEvent: (event: AgentEvent) => void,
   ): Promise<void> {
-    const response = await this.api.stream(
-      '/notta-brain/session/send-message',
-      input,
-      signal,
-    );
-    if (!response.ok) {
-      throw new Error(
-        await describeSseHttpError(response),
-      );
-    }
-    const contentType = response.headers.get('Content-Type') || '';
-    if (!contentType.toLowerCase().includes('text/event-stream')) {
-      throw new Error(
-        `SSE response must use text/event-stream, received ${contentType || 'no Content-Type'}`,
-      );
-    }
-    if (!response.body) throw new Error('SSE response body is empty');
-
+    if (signal.aborted) return;
+    const path = '/notta-brain/session/send-message';
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
     let doneReceived = false;
-    const decoder = createSseDecoder((frame) => {
-      if (doneReceived) return;
-      if (frame.event === 'done') {
-        doneReceived = true;
-        return;
-      }
-      onEvent(decodeAgentEvent(frame.data));
-    });
-    const reader = response.body.getReader();
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        decoder.push(value);
-        if (doneReceived) {
-          await reader.cancel();
-          break;
-        }
-      }
-      if (!doneReceived) decoder.finish();
-    } catch (error) {
-      await reader.cancel(error).catch(() => undefined);
-      throw error;
+      await fetchEventSource(path, {
+        method: 'POST',
+        signal: controller.signal,
+        openWhenHidden: true,
+        fetch: (_resource, init) =>
+          this.api.stream(path, input, init?.signal ?? controller.signal),
+        async onopen(response) {
+          if (!response.ok) {
+            throw new Error(await describeSseHttpError(response));
+          }
+          const contentType = response.headers.get('Content-Type') || '';
+          if (!contentType.toLowerCase().includes('text/event-stream')) {
+            throw new Error(
+              `SSE response must use text/event-stream, received ${contentType || 'no Content-Type'}`,
+            );
+          }
+          if (!response.body) throw new Error('SSE response body is empty');
+        },
+        onmessage(message) {
+          if (doneReceived) return;
+          if (message.event === 'done') {
+            doneReceived = true;
+            controller.abort();
+            return;
+          }
+          if (!message.data) return;
+          onEvent(decodeAgentEvent(message.data));
+        },
+        onerror(error) {
+          throw error;
+        },
+      });
     } finally {
-      reader.releaseLock();
+      signal.removeEventListener('abort', abort);
     }
   }
 

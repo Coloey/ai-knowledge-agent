@@ -9,7 +9,7 @@ const source = readFileSync(new URL('./index.tsx', import.meta.url), 'utf8');
 describe('SmartBar presentation boundary', () => {
   it('does not own SSE parsing, AgentEvent decoding, or AbortControllers', () => {
     expect(source).not.toMatch(
-      /TextDecoder|ReadableStream|createSseDecoder|decodeAgentEvent|AbortController/,
+      /TextDecoder|ReadableStream|fetchEventSource|decodeAgentEvent|AbortController/,
     );
     expect(source).not.toMatch(/event\.type|switch\s*\(/);
   });

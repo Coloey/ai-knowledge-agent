@@ -1,6 +1,6 @@
 # AI Knowledge Agent 能力扩展技术方案
 
-> 状态：P0 v1.0 已实现，P3 Artifact 专项方案待评审，P1/P2/P4 待评审
+> 状态：P0 v1.0 与 P3 Markdown Report Artifact 垂直切片已实现，P1/P2/P4 待评审
 >
 > 日期：2026-09-03
 >

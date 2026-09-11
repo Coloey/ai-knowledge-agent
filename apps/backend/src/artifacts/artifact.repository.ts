@@ -45,6 +45,7 @@ export interface ArtifactRequestResult {
 }
 
 class ArtifactCancellationRace extends Error {}
+class ArtifactGenerationRace extends Error {}
 
 const PUBLIC_ARTIFACT_FAILURE = {
   error_code: 'ARTIFACT_GENERATION_FAILED',
@@ -368,37 +369,43 @@ export class ArtifactRepository {
 
   async markProcessing(artifactId: string, jobId: string, version: number): Promise<boolean> {
     const now = new Date();
-    return this.database.db.transaction(async (tx) => {
-      const [artifact] = await tx
-        .update(artifacts)
-        .set({ status: 'processing', errorCode: null, errorMessage: '', updatedAt: now })
-        .where(and(eq(artifacts.id, artifactId), eq(artifacts.version, version), ne(artifacts.status, 'completed')))
-        .returning({ id: artifacts.id });
-      if (!artifact) return false;
+    try {
+      return await this.database.db.transaction(async (tx) => {
+        const [artifact] = await tx
+          .update(artifacts)
+          .set({ status: 'processing', errorCode: null, errorMessage: '', updatedAt: now })
+          .where(and(eq(artifacts.id, artifactId), eq(artifacts.version, version), ne(artifacts.status, 'completed')))
+          .returning({ id: artifacts.id });
+        if (!artifact) throw new ArtifactGenerationRace();
 
-      const [job] = await tx
-        .update(artifactJobs)
-        .set({
-          status: 'processing',
-          progress: 10,
-          attempts: sql`${artifactJobs.attempts} + 1`,
-          errorCode: null,
-          errorMessage: '',
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(artifactJobs.id, jobId),
-            eq(artifactJobs.artifactId, artifactId),
-            eq(artifactJobs.version, version),
-            ne(artifactJobs.status, 'completed'),
-          ),
-        )
-        .returning({ id: artifactJobs.id });
-      return Boolean(job);
-    });
+        const [job] = await tx
+          .update(artifactJobs)
+          .set({
+            status: 'processing',
+            progress: 10,
+            attempts: sql`${artifactJobs.attempts} + 1`,
+            errorCode: null,
+            errorMessage: '',
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(artifactJobs.id, jobId),
+              eq(artifactJobs.artifactId, artifactId),
+              eq(artifactJobs.version, version),
+              ne(artifactJobs.status, 'completed'),
+            ),
+          )
+          .returning({ id: artifactJobs.id });
+        if (!job) throw new ArtifactGenerationRace();
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof ArtifactGenerationRace) return false;
+      throw error;
+    }
   }
 
   async completeGeneration(
@@ -408,38 +415,44 @@ export class ArtifactRepository {
     output: CompletedArtifactGeneration,
   ): Promise<boolean> {
     const now = new Date();
-    return this.database.db.transaction(async (tx) => {
-      const [artifact] = await tx
-        .update(artifacts)
-        .set({
-          status: 'completed',
-          storageKey: output.storageKey,
-          size: output.size,
-          mimeType: output.mimeType,
-          errorCode: null,
-          errorMessage: '',
-          updatedAt: now,
-        })
-        .where(and(eq(artifacts.id, artifactId), eq(artifacts.version, version), ne(artifacts.status, 'completed')))
-        .returning({ id: artifacts.id });
-      if (!artifact) return false;
+    try {
+      return await this.database.db.transaction(async (tx) => {
+        const [artifact] = await tx
+          .update(artifacts)
+          .set({
+            status: 'completed',
+            storageKey: output.storageKey,
+            size: output.size,
+            mimeType: output.mimeType,
+            errorCode: null,
+            errorMessage: '',
+            updatedAt: now,
+          })
+          .where(and(eq(artifacts.id, artifactId), eq(artifacts.version, version), ne(artifacts.status, 'completed')))
+          .returning({ id: artifacts.id });
+        if (!artifact) throw new ArtifactGenerationRace();
 
-      const [job] = await tx
-        .update(artifactJobs)
-        .set({
-          status: 'completed',
-          progress: 100,
-          errorCode: null,
-          errorMessage: '',
-          completedAt: now,
-          updatedAt: now,
-        })
-        .where(
-          and(eq(artifactJobs.id, jobId), eq(artifactJobs.artifactId, artifactId), eq(artifactJobs.version, version)),
-        )
-        .returning({ id: artifactJobs.id });
-      return Boolean(job);
-    });
+        const [job] = await tx
+          .update(artifactJobs)
+          .set({
+            status: 'completed',
+            progress: 100,
+            errorCode: null,
+            errorMessage: '',
+            completedAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(eq(artifactJobs.id, jobId), eq(artifactJobs.artifactId, artifactId), eq(artifactJobs.version, version)),
+          )
+          .returning({ id: artifactJobs.id });
+        if (!job) throw new ArtifactGenerationRace();
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof ArtifactGenerationRace) return false;
+      throw error;
+    }
   }
 
   async failGeneration(
@@ -450,23 +463,29 @@ export class ArtifactRepository {
     errorMessage: string,
   ): Promise<boolean> {
     const now = new Date();
-    return this.database.db.transaction(async (tx) => {
-      const [artifact] = await tx
-        .update(artifacts)
-        .set({ status: 'failed', errorCode, errorMessage, updatedAt: now })
-        .where(and(eq(artifacts.id, artifactId), eq(artifacts.version, version), ne(artifacts.status, 'completed')))
-        .returning({ id: artifacts.id });
-      if (!artifact) return false;
+    try {
+      return await this.database.db.transaction(async (tx) => {
+        const [artifact] = await tx
+          .update(artifacts)
+          .set({ status: 'failed', errorCode, errorMessage, updatedAt: now })
+          .where(and(eq(artifacts.id, artifactId), eq(artifacts.version, version), ne(artifacts.status, 'completed')))
+          .returning({ id: artifacts.id });
+        if (!artifact) throw new ArtifactGenerationRace();
 
-      const [job] = await tx
-        .update(artifactJobs)
-        .set({ status: 'failed', errorCode, errorMessage, completedAt: now, updatedAt: now })
-        .where(
-          and(eq(artifactJobs.id, jobId), eq(artifactJobs.artifactId, artifactId), eq(artifactJobs.version, version)),
-        )
-        .returning({ id: artifactJobs.id });
-      return Boolean(job);
-    });
+        const [job] = await tx
+          .update(artifactJobs)
+          .set({ status: 'failed', errorCode, errorMessage, completedAt: now, updatedAt: now })
+          .where(
+            and(eq(artifactJobs.id, jobId), eq(artifactJobs.artifactId, artifactId), eq(artifactJobs.version, version)),
+          )
+          .returning({ id: artifactJobs.id });
+        if (!job) throw new ArtifactGenerationRace();
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof ArtifactGenerationRace) return false;
+      throw error;
+    }
   }
 
   private detail(row: {
